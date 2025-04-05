@@ -1,6 +1,17 @@
 use darling::FromField;
 use darling::util::Override;
+use proc_macro2::TokenStream;
+use quote::{ToTokens, quote};
 use syn::{GenericArgument, Ident, PathArguments, Type};
+
+pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
+    quote! {
+        const _: () = {
+            extern crate clap_static as rt;
+            #tts
+        };
+    }
+}
 
 #[derive(FromField)]
 #[darling(attributes(arg))]

@@ -1,29 +1,41 @@
 use darling::FromDeriveInput;
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::{DeriveInput, Generics, Ident};
 
-use crate::common::{ArgField, ArgTyKind};
+use crate::common::{ArgField, ArgTyKind, wrap_anon_item};
 
 #[derive(FromDeriveInput)]
 #[darling(supports(struct_named))]
-struct ParserDef {
+struct ParserItemDef {
     ident: Ident,
     generics: Generics,
     data: darling::ast::Data<(), ArgField>,
 }
 
 pub(crate) fn expand(input: DeriveInput) -> TokenStream {
-    match ParserDef::from_derive_input(&input) {
+    match ParserItemDef::from_derive_input(&input) {
         Err(err) => err.write_errors(),
-        Ok(def) => match expand_derive_parser_inner(def) {
-            Ok(tts) => tts,
+        Ok(def) => match expand_impl(def) {
+            Ok(tts) => wrap_anon_item(tts),
             Err(err) => err.into_compile_error(),
         },
     }
 }
 
-fn expand_derive_parser_inner(def: ParserDef) -> syn::Result<TokenStream> {
+struct ParserImpl {
+    struct_name: Ident,
+    builder_name: Ident,
+    builder_fields: Vec<Ident>,
+    builder_field_tys: Vec<TokenStream>,
+    on_positional: TokenStream,
+    act_defs: Vec<(Ident, TokenStream)>,
+    long_args: Vec<(String, Ident)>,
+    short_args: Vec<(char, Ident)>,
+    finish_exprs: Vec<TokenStream>,
+}
+
+fn expand_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
     let fields = def.data.take_struct().expect("checked by darling").fields;
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
@@ -33,22 +45,25 @@ fn expand_derive_parser_inner(def: ParserDef) -> syn::Result<TokenStream> {
         ));
     }
 
-    let struct_name = &def.ident;
-    let builder_name = format_ident!("Builder{}", def.ident, span = Span::call_site());
-    let subcommand_ty = quote!(rt::__internal::Infallible);
+    let struct_name = def.ident;
+    let builder_name = format_ident!("Builder{struct_name}", span = Span::call_site());
 
-    let mut builder_fields = TokenStream::new();
-    let mut act_defs = TokenStream::new();
-    let mut on_positional = TokenStream::new();
-    let mut finish_fields = TokenStream::new();
+    let mut builder_fields = Vec::new();
+    let mut builder_field_tys = Vec::new();
+    let mut act_defs = Vec::new();
+    let mut finish_exprs = Vec::new();
+
     let mut short_args = Vec::new();
     let mut long_args = Vec::new();
+
+    let mut on_positional = TokenStream::new();
 
     for field in &fields {
         let field_name = field.ident.as_ref().expect("checked by darling");
         let field_name_str = field_name.to_string();
         let field_name_lit = syn::LitStr::new(&field_name_str, field_name.span());
         let field_ty = &field.ty;
+
         let act_name = format_ident!("ACT_{}", field_name, span = Span::call_site());
 
         if let Some(name) = &field.long {
@@ -85,12 +100,10 @@ fn expand_derive_parser_inner(def: ParserDef) -> syn::Result<TokenStream> {
                 quote! { rt::__internal::require_arg(self.#field_name, #field_name_lit) },
             ),
         };
-        builder_fields.extend(quote! {
-            #field_name : #builder_field_ty,
-        });
-        finish_fields.extend(quote! {
-            #field_name : #finish,
-        });
+
+        builder_fields.push(field_name.clone());
+        builder_field_tys.push(builder_field_ty);
+        finish_exprs.push(finish);
 
         if is_positional {
             let parser = parser.expect("checked above");
@@ -111,29 +124,46 @@ fn expand_derive_parser_inner(def: ParserDef) -> syn::Result<TokenStream> {
             } else {
                 quote! { Flag(|__b| { __b.#field_name = true; rt::__internal::Ok(()) }) }
             };
-            act_defs.extend(quote! {
-                #[allow(non_upper_case_globals)]
-                const #act_name : rt::__internal::Action<#builder_name> =
-                    rt::__internal::Action:: #act;
-            });
+            act_defs.push((act_name, act));
         }
     }
 
-    short_args.sort_unstable_by_key(|tup| tup.0);
-    long_args.sort_unstable_by(|lhs, rhs| Ord::cmp(&lhs.0, &rhs.0));
-    let short_args = short_args
-        .into_iter()
-        .flat_map(|(ch, ident)| quote! { (#ch, #ident), })
-        .collect::<TokenStream>();
-    let long_args = long_args
-        .into_iter()
-        .flat_map(|(s, ident)| quote! { (#s, #ident), })
-        .collect::<TokenStream>();
+    short_args.sort_by_key(|tup| tup.0);
+    long_args.sort_by(|lhs, rhs| Ord::cmp(&lhs.0, &rhs.0));
 
-    Ok(quote! {
-        const _: () = {
-            extern crate clap_static as rt;
+    Ok(ParserImpl {
+        struct_name,
+        builder_name,
+        builder_fields,
+        builder_field_tys,
+        on_positional,
+        act_defs,
+        long_args,
+        short_args,
+        finish_exprs,
+    })
+}
 
+impl ToTokens for ParserImpl {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Self {
+            struct_name,
+            builder_name,
+            builder_fields,
+            builder_field_tys,
+            finish_exprs,
+            on_positional,
+            ..
+        } = self;
+
+        let act_name = self.act_defs.iter().map(|(name, _)| name);
+        let act_expr = self.act_defs.iter().map(|(_, expr)| expr);
+        let short_ch = self.short_args.iter().map(|(ch, _)| *ch);
+        let short_act = self.short_args.iter().map(|(_, act)| act);
+        let long_str = self.long_args.iter().map(|(s, _)| s.as_str());
+        let long_act = self.long_args.iter().map(|(_, act)| act);
+
+        tokens.extend(quote! {
             #[automatically_derived]
             impl rt::Parser for #struct_name {}
 
@@ -144,20 +174,21 @@ fn expand_derive_parser_inner(def: ParserDef) -> syn::Result<TokenStream> {
 
             #[derive(Default)]
             struct #builder_name {
-                #builder_fields
+                #(#builder_fields : #builder_field_tys,)*
             }
 
-            #act_defs
+            #(const #act_name : rt::__internal::Action<#builder_name> =
+                rt::__internal::Action:: #act_expr;)*
 
             #[automatically_derived]
             impl rt::__internal::ParserBuilder for #builder_name {
                 type Output = #struct_name;
-                type Subcommand = #subcommand_ty;
+                type Subcommand = rt::__internal::Infallible;
 
                 const SHORT_ARGS: &'static [(rt::__internal::char, rt::__internal::Action<Self>)] =
-                    &[#short_args];
+                    &[#((#short_ch, #short_act)),*];
                 const LONG_ARGS: &'static [(&'static rt::__internal::str, rt::__internal::Action<Self>)] =
-                    &[#long_args];
+                    &[#((#long_str, #long_act)),*];
 
                 fn feed_positional(&mut self, __v: rt::__internal::OsString)
                     -> rt::__internal::Result<(), rt::Error>
@@ -169,9 +200,11 @@ fn expand_derive_parser_inner(def: ParserDef) -> syn::Result<TokenStream> {
                 fn finish(self, __subcmd: rt::__internal::Option<Self::Subcommand>)
                     -> rt::__internal::Result<Self::Output, rt::Error>
                 {
-                    rt::__internal::Ok(Self::Output { #finish_fields })
+                    rt::__internal::Ok(Self::Output {
+                        #(#builder_fields : #finish_exprs,)*
+                    })
                 }
             }
-        };
-    })
+        });
+    }
 }
