@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use clap_static::Parser;
-use clap_static_derive::Parser;
+use clap_static::{Parser, Subcommand};
 
 #[derive(Debug, PartialEq, Parser)]
 struct MyCli {
@@ -12,17 +11,29 @@ struct MyCli {
 
     #[arg(short = 'v')]
     debug: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Debug, PartialEq, Subcommand)]
+enum Commands {
+    Test {
+        #[arg(short, long)]
+        list: bool,
+    },
 }
 
 #[test]
 fn parse() {
-    let args = MyCli::try_parse_from(["foo", "--config", "foo", "bar"]).unwrap();
+    let args = MyCli::try_parse_from(["foo", "--config", "foo", "bar", "test", "-l"]).unwrap();
     assert_eq!(
         args,
         MyCli {
             name: Some("bar".into()),
             config: Some("foo".into()),
             debug: false,
+            command: Some(Commands::Test { list: true }),
         }
     );
 }

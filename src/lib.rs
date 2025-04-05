@@ -4,6 +4,8 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::PathBuf;
 
+pub use clap_static_derive::{Parser, Subcommand};
+
 #[doc(hidden)]
 #[path = "internal.rs"]
 pub mod __internal;
@@ -12,6 +14,7 @@ pub mod __internal;
 pub enum Error {
     InvalidUtf8(OsString),
     MissingRequiredArgument(&'static str),
+    MissingRequiredSubcommand,
     UnknownArgument(OsString),
     UnexpectedValue(String, OsString),
     MissingValue(String),
@@ -23,6 +26,7 @@ impl fmt::Display for Error {
         match self {
             Error::InvalidUtf8(s) => write!(f, "invalid UTF8: {s:?}"),
             Error::MissingRequiredArgument(name) => write!(f, "missing required argument: {name}"),
+            Error::MissingRequiredSubcommand => write!(f, "missing required subcommand"),
             Error::UnknownArgument(s) => write!(f, "unknown argument: {s:?}"),
             Error::UnexpectedValue(name, value) => {
                 write!(f, "unexpected value for {value:?} for {name}")
@@ -87,8 +91,6 @@ impl FromValue for PathBuf {
 impl sealed::Sealed for String {}
 impl FromValue for String {
     fn try_from_value(v: Cow<'_, OsStr>) -> Result<Self, Error> {
-        v.into_owned()
-            .into_string()
-            .map_err(|s| Error::InvalidUtf8(s))
+        v.into_owned().into_string().map_err(Error::InvalidUtf8)
     }
 }

@@ -1,19 +1,23 @@
 use darling::FromDeriveInput;
+use darling::util::Override;
+use heck::ToKebabCase;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
-use syn::{DeriveInput, Generics, Ident};
+use syn::{DeriveInput, Error, Generics, Ident};
 
-use crate::common::{ArgField, ArgTyKind, wrap_anon_item};
+use crate::common::{
+    Arg, ArgField, ArgOrCommand, ArgTyKind, TY_OPTION, strip_ty_ctor, wrap_anon_item,
+};
 
 #[derive(FromDeriveInput)]
 #[darling(supports(struct_named))]
-struct ParserItemDef {
-    ident: Ident,
-    generics: Generics,
-    data: darling::ast::Data<(), ArgField>,
+pub struct ParserItemDef {
+    pub ident: Ident,
+    pub generics: Generics,
+    pub data: darling::ast::Data<(), ArgField>,
 }
 
-pub(crate) fn expand(input: DeriveInput) -> TokenStream {
+pub fn expand(input: DeriveInput) -> TokenStream {
     match ParserItemDef::from_derive_input(&input) {
         Err(err) => err.write_errors(),
         Ok(def) => match expand_impl(def) {
@@ -23,9 +27,14 @@ pub(crate) fn expand(input: DeriveInput) -> TokenStream {
     }
 }
 
-struct ParserImpl {
-    struct_name: Ident,
-    builder_name: Ident,
+pub struct ParserImpl {
+    pub builder: BuilderImpl,
+}
+
+pub struct BuilderImpl {
+    pub struct_name: Ident,
+    pub struct_ctor: TokenStream,
+    pub builder_name: Ident,
     builder_fields: Vec<Ident>,
     builder_field_tys: Vec<TokenStream>,
     on_positional: TokenStream,
@@ -33,9 +42,11 @@ struct ParserImpl {
     long_args: Vec<(String, Ident)>,
     short_args: Vec<(char, Ident)>,
     finish_exprs: Vec<TokenStream>,
+    subcommand_ty: TokenStream,
+    subcommand_finish: Option<TokenStream>,
 }
 
-fn expand_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
+pub fn expand_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
     let fields = def.data.take_struct().expect("checked by darling").fields;
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
@@ -55,6 +66,8 @@ fn expand_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
 
     let mut short_args = Vec::new();
     let mut long_args = Vec::new();
+    let mut subcommand_ty = quote!(rt::__internal::Infallible);
+    let mut subcommand_finish = None;
 
     let mut on_positional = TokenStream::new();
 
@@ -64,20 +77,48 @@ fn expand_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
         let field_name_lit = syn::LitStr::new(&field_name_str, field_name.span());
         let field_ty = &field.ty;
 
-        let act_name = format_ident!("ACT_{}", field_name, span = Span::call_site());
+        let act_name = format_ident!(
+            "__ACT_{struct_name}_FIELD_{field_name}",
+            span = Span::call_site()
+        );
 
-        if let Some(name) = &field.long {
-            let name = name.as_ref().unwrap_or(&field_name_str).clone();
-            long_args.push((name, act_name.clone()));
-        }
-        if let Some(ch) = &field.short {
-            let ch = ch
-                .clone()
-                .unwrap_or_else(|| field_name_str.chars().next().expect("must have name"));
-            short_args.push((ch, act_name.clone()));
-        }
-
-        let is_positional = field.long.is_none() && field.short.is_none();
+        let is_positional = match &field.attrs {
+            ArgOrCommand::None => true,
+            ArgOrCommand::Arg(Arg { long, short }) => {
+                if let Some(name) = long {
+                    let name = match name {
+                        Override::Inherit => field_name_str.to_kebab_case(),
+                        Override::Explicit(s) => s.clone(),
+                    };
+                    long_args.push((name, act_name.clone()));
+                }
+                if let Some(ch) = short {
+                    let ch = ch
+                        .clone()
+                        .unwrap_or_else(|| field_name_str.chars().next().expect("must have name"));
+                    short_args.push((ch, act_name.clone()));
+                }
+                false
+            }
+            ArgOrCommand::Command(cmd) => {
+                assert!(cmd.subcommand, "validated");
+                if subcommand_finish.is_some() {
+                    return Err(Error::new(
+                        field_name.span(),
+                        "duplicated `#[command(subcommand)]`",
+                    ));
+                }
+                if let Some(arg_ty) = strip_ty_ctor(field_ty, TY_OPTION) {
+                    subcommand_ty = quote! { #arg_ty };
+                    subcommand_finish = Some(quote! { #field_name: __subcmd });
+                } else {
+                    subcommand_ty = quote! { #field_ty };
+                    subcommand_finish =
+                        Some(quote! { #field_name: rt::__internal::err_require_subcmd(__subcmd)? });
+                }
+                continue;
+            }
+        };
 
         let (builder_field_ty, parser, finish) = match field.arg_ty_kind() {
             ArgTyKind::Bool => {
@@ -97,7 +138,7 @@ fn expand_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
             ArgTyKind::Convert => (
                 quote!(Option<#field_ty>),
                 Some(quote! { <#field_ty as rt::FromValue>::try_from_value }),
-                quote! { rt::__internal::require_arg(self.#field_name, #field_name_lit) },
+                quote! { rt::__internal::err_require_arg(self.#field_name, #field_name_lit)? },
             ),
         };
 
@@ -132,27 +173,55 @@ fn expand_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
     long_args.sort_by(|lhs, rhs| Ord::cmp(&lhs.0, &rhs.0));
 
     Ok(ParserImpl {
-        struct_name,
-        builder_name,
-        builder_fields,
-        builder_field_tys,
-        on_positional,
-        act_defs,
-        long_args,
-        short_args,
-        finish_exprs,
+        builder: BuilderImpl {
+            struct_name,
+            struct_ctor: quote! { Self::Output },
+            builder_name,
+            builder_fields,
+            builder_field_tys,
+            on_positional,
+            act_defs,
+            long_args,
+            short_args,
+            finish_exprs,
+            subcommand_ty,
+            subcommand_finish,
+        },
     })
 }
 
 impl ToTokens for ParserImpl {
     fn to_tokens(&self, tokens: &mut TokenStream) {
+        let builder = &self.builder;
+        let struct_name = &builder.struct_name;
+        let builder_name = &builder.builder_name;
+
+        tokens.extend(quote! {
+            #[automatically_derived]
+            impl rt::Parser for #struct_name {}
+
+            #[automatically_derived]
+            impl rt::__internal::ParserInternal for #struct_name {
+                type __Builder = #builder_name;
+            }
+
+            #builder
+        });
+    }
+}
+
+impl ToTokens for BuilderImpl {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
             struct_name,
+            struct_ctor,
             builder_name,
             builder_fields,
             builder_field_tys,
             finish_exprs,
             on_positional,
+            subcommand_ty,
+            subcommand_finish,
             ..
         } = self;
 
@@ -164,14 +233,6 @@ impl ToTokens for ParserImpl {
         let long_act = self.long_args.iter().map(|(_, act)| act);
 
         tokens.extend(quote! {
-            #[automatically_derived]
-            impl rt::Parser for #struct_name {}
-
-            #[automatically_derived]
-            impl rt::__internal::ParserInternal for #struct_name {
-                type __Builder = #builder_name;
-            }
-
             #[derive(Default)]
             struct #builder_name {
                 #(#builder_fields : #builder_field_tys,)*
@@ -183,7 +244,7 @@ impl ToTokens for ParserImpl {
             #[automatically_derived]
             impl rt::__internal::ParserBuilder for #builder_name {
                 type Output = #struct_name;
-                type Subcommand = rt::__internal::Infallible;
+                type Subcommand = #subcommand_ty;
 
                 const SHORT_ARGS: &'static [(rt::__internal::char, rt::__internal::Action<Self>)] =
                     &[#((#short_ch, #short_act)),*];
@@ -200,8 +261,9 @@ impl ToTokens for ParserImpl {
                 fn finish(self, __subcmd: rt::__internal::Option<Self::Subcommand>)
                     -> rt::__internal::Result<Self::Output, rt::Error>
                 {
-                    rt::__internal::Ok(Self::Output {
+                    rt::__internal::Ok(#struct_ctor {
                         #(#builder_fields : #finish_exprs,)*
+                        #subcommand_finish
                     })
                 }
             }

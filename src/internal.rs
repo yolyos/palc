@@ -1,6 +1,7 @@
 pub use std::borrow::Cow;
 pub use std::convert::Infallible;
 pub use std::ffi::{OsStr, OsString};
+pub use std::unreachable;
 pub use {Default, Err, Iterator, None, Ok, Option, Result, Some, char, str, usize};
 
 use super::Error;
@@ -16,6 +17,13 @@ pub fn err_extra_positional(arg: OsString) -> Result<(), Error> {
     Err(Error::UnknownArgument(arg))
 }
 
+pub fn err_require_subcmd<T>(subcmd: Option<T>) -> Result<T, Error> {
+    match subcmd {
+        Some(subcmd) => Ok(subcmd),
+        None => Err(Error::MissingRequiredSubcommand),
+    }
+}
+
 pub enum Action<B> {
     Flag(fn(&mut B) -> Result<(), Error>),
     KeyValue(fn(&mut B, Cow<'_, OsStr>) -> Result<(), Error>),
@@ -27,7 +35,7 @@ pub trait ParserInternal {
 
 pub trait ParserBuilder: Sized + Default + 'static {
     type Output;
-    type Subcommand: SubcommandInternal;
+    type Subcommand: crate::Subcommand;
 
     const SHORT_ARGS: &'static [(char, Action<Self>)];
     const LONG_ARGS: &'static [(&'static str, Action<Self>)];
