@@ -25,7 +25,7 @@ enum Commands {
 }
 
 #[test]
-fn parse() {
+fn smoke() {
     let args = MyCli::try_parse_from(["foo", "--config", "foo", "bar", "test", "-l"]).unwrap();
     assert_eq!(
         args,

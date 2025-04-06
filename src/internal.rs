@@ -6,127 +6,136 @@ pub use {Default, Err, Iterator, None, Ok, Option, Result, Some, char, str, usiz
 
 use super::Error;
 
-pub fn err_require_arg<T>(v: Option<T>, name: &'static str) -> Result<T, Error> {
+pub fn require_arg<T>(v: Option<T>, name: &'static str) -> Result<T, Error> {
     match v {
         Some(v) => Ok(v),
         None => Err(Error::MissingRequiredArgument(name)),
     }
 }
 
-pub fn err_extra_positional(arg: OsString) -> Result<(), Error> {
+pub fn extra_positional<T>(arg: OsString) -> Result<T, Error> {
     Err(Error::UnknownArgument(arg))
 }
 
-pub fn err_require_subcmd<T>(subcmd: Option<T>) -> Result<T, Error> {
+pub fn require_subcmd<T>(subcmd: Option<T>) -> Result<T, Error> {
     match subcmd {
         Some(subcmd) => Ok(subcmd),
         None => Err(Error::MissingRequiredSubcommand),
     }
 }
 
-pub enum Action<B> {
-    Flag(fn(&mut B) -> Result<(), Error>),
-    KeyValue(fn(&mut B, Cow<'_, OsStr>) -> Result<(), Error>),
+pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
+    Cow::Owned(std::mem::take(s))
 }
 
-pub trait ParserInternal {
-    type __Builder: ParserBuilder<Output = Self>;
+/// This is actually `enum { Ok(_), Unknown, Err(Error) }`,
+/// but use `Result` for `?` support.
+/// WAIT: <https://github.com/rust-lang/rust/issues/84277>
+pub type FeedNamed<S> = Result<FeedNamedOk<S>, Option<Error>>;
+pub enum FeedNamedOk<S> {
+    Arg0,
+    Arg1(fn(&mut S, Cow<'_, OsStr>) -> Result<(), Error>),
 }
 
-pub trait ParserBuilder: Sized + Default + 'static {
+/// This is actually `enum { Ok, Unknown, Err(Error) }`. Same as above.
+pub type FeedUnnamed = Result<(), Option<Error>>;
+
+pub trait ArgsInternal: Sized + 'static {
+    type __State: ParserState<Output = Self>;
+}
+
+pub trait ParserState: Sized + Default + 'static {
     type Output;
     type Subcommand: crate::Subcommand;
 
-    const SHORT_ARGS: &'static [(char, Action<Self>)];
-    const LONG_ARGS: &'static [(&'static str, Action<Self>)];
+    fn feed_named(&mut self, name: &str) -> FeedNamed<Self>;
 
-    fn feed_positional(&mut self, arg: OsString) -> Result<(), Error>;
+    fn feed_unnamed(&mut self, arg: &mut OsString) -> FeedUnnamed;
+
     fn finish(self, subcmd: Option<Self::Subcommand>) -> Result<Self::Output, Error>;
 }
 
-pub trait SubcommandInternal: Sized {
-    const __COMMANDS: &'static [&'static str];
-
-    fn __try_parse_subcommand_from(
-        cmd_idx: usize,
+pub trait CommandInternal: Sized {
+    fn try_parse_with_name(
+        name: OsString,
         iter: &mut dyn Iterator<Item = OsString>,
     ) -> Result<Self, Error>;
 }
 
-pub fn try_parse_from_builder<B: ParserBuilder>(
+pub fn try_parse_with_state<S: ParserState>(
     iter: &mut dyn Iterator<Item = OsString>,
-) -> Result<B::Output, Error> {
-    let long_args = B::LONG_ARGS;
-    let short_args = B::SHORT_ARGS;
-
-    let mut builder = B::default();
-    while let Some(arg) = iter.next() {
+) -> Result<S::Output, Error> {
+    let mut state = S::default();
+    while let Some(mut arg) = iter.next() {
         let argb = arg.as_encoded_bytes();
         if argb == b"--" {
             todo!()
         } else if argb == b"-" {
             todo!()
         } else if argb.starts_with(b"--") {
-            let arg = &arg
+            let arg = arg
                 .to_str()
-                .ok_or_else(|| Error::InvalidUtf8(arg.to_os_string()))?[2..];
+                .ok_or_else(|| Error::InvalidUtf8(arg.to_os_string()))?;
             let (name, value) = match arg.split_once("=") {
                 Some((name, value)) => (name, Some(value)),
                 None => (arg, None),
             };
-            let idx = long_args
-                .binary_search_by_key(&name, |(k, _)| k)
-                .map_err(|_| Error::UnknownArgument(name.into()))?;
-            match (&long_args[idx].1, value) {
-                (Action::Flag(_), Some(v)) => {
-                    return Err(Error::UnexpectedValue(name.into(), v.into()));
+            match state.feed_named(name) {
+                Err(err) => return Err(err.unwrap_or_else(|| Error::UnknownArgument(arg.into()))),
+                Ok(FeedNamedOk::Arg0) => {
+                    if let Some(v) = value {
+                        return Err(Error::UnexpectedValue(name.into(), v.into()));
+                    }
                 }
-                (Action::Flag(f), None) => f(&mut builder)?,
-                (Action::KeyValue(f), Some(value)) => {
-                    f(&mut builder, Cow::Borrowed(OsStr::new(value)))?;
-                }
-                (Action::KeyValue(f), None) => {
-                    let value = iter.next().ok_or(Error::MissingValue(name.into()))?;
-                    f(&mut builder, Cow::Owned(value))?;
+                Ok(FeedNamedOk::Arg1(updater)) => {
+                    let value = match value {
+                        Some(v) => Cow::Borrowed(OsStr::new(v)),
+                        None => Cow::Owned(iter.next().ok_or(Error::MissingValue(name.into()))?),
+                    };
+                    updater(&mut state, value)?
                 }
             }
         } else if argb.starts_with(b"-") {
-            let arg = &arg
+            let mut arg = &arg
                 .to_str()
                 .ok_or_else(|| Error::InvalidUtf8(arg.to_os_string()))?[1..];
-            let mut chars = arg.chars();
-            for name in chars.by_ref() {
-                let idx = short_args
-                    .binary_search_by_key(&name, |(k, _)| *k)
-                    .map_err(|_| Error::UnknownArgument(name.to_string().into()))?;
-                match &short_args[idx].1 {
-                    Action::Flag(f) => f(&mut builder)?,
-                    Action::KeyValue(f) => {
-                        let rest = chars.as_str();
-                        let value = if !rest.is_empty() {
-                            Cow::Borrowed(OsStr::new(rest.strip_prefix('=').unwrap_or(rest)))
+
+            // Iterate over each `char`, but chunk it as `&str` streams.
+            while !arg.is_empty() {
+                let mut ch_iter = arg.char_indices();
+                ch_iter.next();
+                let name = &arg[..arg.len() - ch_iter.as_str().len()];
+                arg = ch_iter.as_str();
+
+                match state.feed_named(name) {
+                    Ok(FeedNamedOk::Arg0) => {}
+                    Err(None) => return Err(Error::UnknownArgument(arg.into())),
+                    Err(Some(err)) => return Err(err),
+                    Ok(FeedNamedOk::Arg1(updater)) => {
+                        let value = if arg.is_empty() {
+                            Cow::Owned(
+                                iter.next()
+                                    .ok_or_else(|| Error::MissingValue(name.into()))?,
+                            )
                         } else {
-                            Cow::Owned(iter.next().ok_or(Error::MissingValue(name.into()))?)
+                            let arg = arg.strip_prefix("=").unwrap_or(arg);
+                            Cow::Borrowed(OsStr::new(arg))
                         };
-                        f(&mut builder, value)?;
+                        updater(&mut state, value)?;
                         break;
                     }
                 }
             }
-        } else if let Err(err) = builder.feed_positional(arg.clone()) {
-            let arg = match err {
-                Error::UnknownArgument(arg) => arg,
-                err => return Err(err),
-            };
-            if let Ok(idx) = B::Subcommand::__COMMANDS
-                .binary_search_by_key(&arg.as_encoded_bytes(), |k| k.as_bytes())
-            {
-                let subcmd = B::Subcommand::__try_parse_subcommand_from(idx, iter)?;
-                return builder.finish(Some(subcmd));
-            } else {
-                return Err(Error::UnknownArgument(arg));
+        } else {
+            match state.feed_unnamed(&mut arg) {
+                Ok(()) => {}
+                Err(Some(err)) => return Err(err),
+                Err(None) => {
+                    let subcmd = S::Subcommand::try_parse_with_name(arg, iter)?;
+                    return state.finish(Some(subcmd));
+                }
             }
         }
     }
-    builder.finish(None)
+    state.finish(None)
 }

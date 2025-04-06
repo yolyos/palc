@@ -39,7 +39,7 @@ impl fmt::Display for Error {
 }
 
 /// Top-level command interface.
-pub trait Parser: Sized + 'static + __internal::ParserInternal {
+pub trait Parser: Sized + 'static + __internal::ArgsInternal {
     fn parse() -> Self {
         match Self::try_parse_from(std::env::args_os()) {
             Ok(v) => v,
@@ -52,24 +52,22 @@ pub trait Parser: Sized + 'static + __internal::ParserInternal {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        __internal::try_parse_from_builder::<Self::__Builder>(
+        __internal::try_parse_with_state::<Self::__State>(
             &mut iter.into_iter().skip(1).map(|s| s.into()),
         )
     }
 }
 
 /// A subcommand enum.
-pub trait Subcommand: Sized + 'static + __internal::SubcommandInternal {}
+pub trait Subcommand: Sized + 'static + __internal::CommandInternal {}
 
 impl Subcommand for Infallible {}
-impl __internal::SubcommandInternal for Infallible {
-    const __COMMANDS: &'static [&'static str] = &[];
-
-    fn __try_parse_subcommand_from(
-        _cmd_idx: usize,
+impl __internal::CommandInternal for Infallible {
+    fn try_parse_with_name(
+        name: OsString,
         _iter: &mut dyn Iterator<Item = OsString>,
     ) -> Result<Self, Error> {
-        unreachable!()
+        Err(Error::UnknownArgument(name))
     }
 }
 

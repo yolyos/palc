@@ -2,10 +2,10 @@ use darling::FromDeriveInput;
 use heck::ToKebabCase;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
-use syn::{DeriveInput, Generics, Ident};
+use syn::{DeriveInput, Generics, Ident, LitByteStr};
 
 use crate::common::{CommandVariant, wrap_anon_item};
-use crate::derive_parser::{BuilderImpl, ParserItemDef};
+use crate::derive_parser::ParserStateDefImpl;
 
 #[derive(FromDeriveInput)]
 #[darling(supports(enum_named))]
@@ -27,12 +27,11 @@ pub(crate) fn expand(input: DeriveInput) -> TokenStream {
 
 struct SubcommandImpl {
     enum_name: Ident,
-    variant_builder_impls: Vec<BuilderImpl>,
-    variant_infos: Vec<(String, usize)>,
+    variants: Vec<(String, Span, ParserStateDefImpl)>,
 }
 
 fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
-    let variants = def.data.take_enum().expect("checked by darling");
+    let input_variants = def.data.take_enum().expect("checked by darling");
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
         return Err(syn::Error::new(
@@ -43,30 +42,27 @@ fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
 
     let enum_name = def.ident;
 
-    let mut variant_builder_impls = Vec::new();
-    let mut variant_infos = Vec::new();
+    let variants = input_variants
+        .into_iter()
+        .map(|variant| {
+            let variant_name = variant.ident;
+            let mut state = crate::derive_parser::expand_state_def_impl(
+                format_ident!("{enum_name}{variant_name}State", span = variant_name.span()),
+                enum_name.to_token_stream(),
+                &variant.fields.fields,
+            )?;
+            state.output_ctor = Some(quote!(#enum_name :: #variant_name));
+            Ok((
+                variant_name.to_string().to_kebab_case(),
+                variant_name.span(),
+                state,
+            ))
+        })
+        .collect::<syn::Result<Vec<_>>>()?;
 
-    for (idx, variant) in variants.into_iter().enumerate() {
-        let variant_name = variant.ident;
-
-        let mut builder_impl = crate::derive_parser::expand_impl(ParserItemDef {
-            ident: format_ident!("{enum_name}{variant_name}", span = Span::call_site()),
-            generics: Default::default(),
-            data: darling::ast::Data::Struct(variant.fields),
-        })?
-        .builder;
-        builder_impl.struct_name = enum_name.clone();
-        builder_impl.struct_ctor = quote!(#enum_name :: #variant_name);
-
-        variant_builder_impls.push(builder_impl);
-        variant_infos.push((variant_name.to_string().to_kebab_case(), idx));
-    }
-
-    variant_infos.sort_by(|lhs, rhs| Ord::cmp(&lhs.0, &rhs.0));
     Ok(SubcommandImpl {
         enum_name,
-        variant_builder_impls,
-        variant_infos,
+        variants,
     })
 }
 
@@ -74,28 +70,26 @@ impl ToTokens for SubcommandImpl {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
             enum_name,
-            variant_builder_impls,
-            variant_infos,
+            variants,
         } = self;
-
-        let variant_names = variant_infos.iter().map(|(s, _)| s);
-        let builder_names = variant_builder_impls.iter().map(|i| &i.builder_name);
-        let idx = variant_infos.iter().map(|(_, idx)| *idx);
+        let name_byte_strs = variants
+            .iter()
+            .map(|(name, span, _)| LitByteStr::new(name.as_bytes(), *span));
+        let states = variants.iter().map(|(_, _, state)| state);
+        let state_names = variants.iter().map(|(_, _, state)| &state.state_name);
 
         tokens.extend(quote! {
-            #(#variant_builder_impls)*
+            #(#states)*
 
             impl rt::Subcommand for #enum_name {}
-            impl rt::__internal::SubcommandInternal for #enum_name {
-                const __COMMANDS: &'static [&'static rt::__internal::str] = &[#(#variant_names),*];
-
-                fn __try_parse_subcommand_from(
-                    __cmd_idx: rt::__internal::usize,
+            impl rt::__internal::CommandInternal for #enum_name {
+                fn try_parse_with_name(
+                    __name: rt::__internal::OsString,
                     __iter: &mut dyn rt::__internal::Iterator<Item = rt::__internal::OsString>,
                 ) -> rt::__internal::Result<Self, rt::Error> {
-                    match __cmd_idx {
-                        #(#idx => rt::__internal::try_parse_from_builder::<#builder_names>(__iter),)*
-                        _ => rt::__internal::unreachable!(),
+                    match rt::__internal::OsStr::as_encoded_bytes(&__name) {
+                        #(#name_byte_strs => rt::__internal::try_parse_with_state::<#state_names>(__iter),)*
+                        _ => rt::__internal::extra_positional(__name),
                     }
                 }
             }
