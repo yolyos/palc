@@ -56,10 +56,10 @@ impl ToTokens for ParserImpl {
 
         tokens.extend(quote! {
             #[automatically_derived]
-            impl rt::Parser for #struct_name {}
+            impl __rt::Parser for #struct_name {}
 
             #[automatically_derived]
-            impl rt::__internal::ArgsInternal for #struct_name {
+            impl __rt::ArgsInternal for #struct_name {
                 type __State = #state_name;
             }
 
@@ -90,7 +90,7 @@ pub fn expand_state_def_impl(
     let mut state_field_tys = Vec::new();
     let mut field_finishes = Vec::new();
 
-    let mut subcommand_ty = quote!(rt::__internal::Infallible);
+    let mut subcommand_ty = quote!(__rt::Infallible);
     let mut subcommand_finish = None;
 
     let mut match_named_arms = TokenStream::new();
@@ -119,13 +119,13 @@ pub fn expand_state_def_impl(
             }
             ArgTyKind::Option(subty) => (
                 quote! { #field_ty },
-                quote! { <#subty as rt::FromValue>::try_from_value },
+                quote! { <#subty as __rt::FromValue>::try_from_value },
                 quote! { self.#field_name },
             ),
             ArgTyKind::Convert => (
                 quote!(Option<#field_ty>),
-                quote! { <#field_ty as rt::FromValue>::try_from_value },
-                quote! { rt::__internal::require_arg(self.#field_name, #field_name_lit)? },
+                quote! { <#field_ty as __rt::FromValue>::try_from_value },
+                quote! { __rt::require_arg(self.#field_name, #field_name_lit)? },
             ),
         };
 
@@ -133,9 +133,9 @@ pub fn expand_state_def_impl(
             // Unnamed (positional) arguments.
             ArgOrCommand::None => {
                 handle_unnamed.extend(quote! {
-                    if let rt::__internal::None = self.#field_name {
-                        self.#field_name = rt::__internal::Some(#parser(rt::__internal::take_arg(__arg))?);
-                        return rt::__internal::Ok(());
+                    if let __rt::None = self.#field_name {
+                        self.#field_name = __rt::Some(#parser(__rt::take_arg(__arg))?);
+                        return __rt::Ok(());
                     }
                 });
                 state_fields.push(field_name);
@@ -163,12 +163,12 @@ pub fn expand_state_def_impl(
                 let handler = match field.arg_ty_kind() {
                     ArgTyKind::Bool => quote! {{
                         self.#field_name = true;
-                        rt::__internal::Ok(rt::__internal::FeedNamedOk::Arg0)
+                        __rt::Ok(__rt::FeedNamedOk::Arg0)
                     }},
                     ArgTyKind::Option(_) | ArgTyKind::Convert => quote! {
-                        rt::__internal::Ok(rt::__internal::FeedNamedOk::Arg1(|__s, __v| {
+                        __rt::Ok(__rt::FeedNamedOk::Arg1(|__s, __v| {
                             __s.#field_name = Some(#parser(__v)?);
-                            rt::__internal::Ok(())
+                            __rt::Ok(())
                         }))
                     },
                 };
@@ -193,7 +193,7 @@ pub fn expand_state_def_impl(
                 } else {
                     subcommand_ty = quote! { #field_ty };
                     subcommand_finish =
-                        Some(quote! { #field_name: rt::__internal::require_subcmd(__subcmd)? });
+                        Some(quote! { #field_name: __rt::require_subcmd(__subcmd)? });
                 }
             }
         }
@@ -236,26 +236,26 @@ impl ToTokens for ParserStateDefImpl {
             }
 
             #[automatically_derived]
-            impl rt::__internal::ParserState for #name {
+            impl __rt::ParserState for #name {
                 type Output = #output_ty;
                 type Subcommand = #subcommand_ty;
 
-                fn feed_named(&mut self, __name: &rt::__internal::str) -> rt::__internal::FeedNamed<Self> {
+                fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<Self> {
                     match __name {
                         #match_named_arms
-                        _ => rt::__internal::Err(rt::__internal::None)
+                        _ => __rt::Err(__rt::None)
                     }
                 }
 
-                fn feed_unnamed(&mut self, __arg: &mut rt::__internal::OsString) -> rt::__internal::FeedUnnamed {
+                fn feed_unnamed(&mut self, __arg: &mut __rt::OsString) -> __rt::FeedUnnamed {
                     #handle_unnamed
-                    rt::__internal::Err(rt::__internal::None)
+                    __rt::Err(__rt::None)
                 }
 
-                fn finish(self, __subcmd: rt::__internal::Option<Self::Subcommand>)
-                    -> rt::__internal::Result<Self::Output, rt::Error>
+                fn finish(self, __subcmd: __rt::Option<Self::Subcommand>)
+                    -> __rt::Result<Self::Output, __rt::Error>
                 {
-                    rt::__internal::Ok(#output_ctor {
+                    __rt::Ok(#output_ctor {
                         #(#fields : #field_finishes,)*
                         #subcommand_finish
                     })

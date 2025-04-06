@@ -81,15 +81,15 @@ impl ToTokens for SubcommandImpl {
         tokens.extend(quote! {
             #(#states)*
 
-            impl rt::Subcommand for #enum_name {}
-            impl rt::__internal::CommandInternal for #enum_name {
+            impl __rt::Subcommand for #enum_name {}
+            impl __rt::CommandInternal for #enum_name {
                 fn try_parse_with_name(
-                    __name: rt::__internal::OsString,
-                    __iter: &mut dyn rt::__internal::Iterator<Item = rt::__internal::OsString>,
-                ) -> rt::__internal::Result<Self, rt::Error> {
-                    match rt::__internal::OsStr::as_encoded_bytes(&__name) {
-                        #(#name_byte_strs => rt::__internal::try_parse_with_state::<#state_names>(__iter),)*
-                        _ => rt::__internal::extra_positional(__name),
+                    __name: __rt::OsString,
+                    __iter: &mut dyn __rt::Iterator<Item = __rt::OsString>,
+                ) -> __rt::Result<Self, __rt::Error> {
+                    match __rt::OsStr::as_encoded_bytes(&__name) {
+                        #(#name_byte_strs => __rt::try_parse_with_state::<#state_names>(__iter),)*
+                        _ => __rt::extra_positional(__name),
                     }
                 }
             }

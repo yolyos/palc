@@ -1,32 +1,7 @@
-pub use std::borrow::Cow;
-pub use std::convert::Infallible;
-pub use std::ffi::{OsStr, OsString};
-pub use std::unreachable;
-pub use {Default, Err, Iterator, None, Ok, Option, Result, Some, char, str, usize};
+use std::borrow::Cow;
+use std::ffi::{OsStr, OsString};
 
 use super::Error;
-
-pub fn require_arg<T>(v: Option<T>, name: &'static str) -> Result<T, Error> {
-    match v {
-        Some(v) => Ok(v),
-        None => Err(Error::MissingRequiredArgument(name)),
-    }
-}
-
-pub fn extra_positional<T>(arg: OsString) -> Result<T, Error> {
-    Err(Error::UnknownArgument(arg))
-}
-
-pub fn require_subcmd<T>(subcmd: Option<T>) -> Result<T, Error> {
-    match subcmd {
-        Some(subcmd) => Ok(subcmd),
-        None => Err(Error::MissingRequiredSubcommand),
-    }
-}
-
-pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
-    Cow::Owned(std::mem::take(s))
-}
 
 /// This is actually `enum { Ok(_), Unknown, Err(Error) }`,
 /// but use `Result` for `?` support.

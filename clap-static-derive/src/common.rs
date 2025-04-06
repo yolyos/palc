@@ -36,7 +36,7 @@ pub struct CommandVariant {
 pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
     quote! {
         const _: () = {
-            extern crate clap_static as rt;
+            use ::clap_static::__private as __rt;
             #tts
         };
     }
