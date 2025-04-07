@@ -34,7 +34,7 @@ pub trait ParserState: Sized + Default + 'static {
 }
 
 pub trait CommandInternal: Sized {
-    fn try_parse_with_name(name: OsString, args: &mut ArgsIter<'_>) -> Result<Self, Error>;
+    fn try_parse_with_name(name: &str, args: &mut ArgsIter<'_>) -> Result<Self, Error>;
 }
 
 pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S::Output, Error> {
@@ -55,6 +55,9 @@ pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S
                 Ok(()) => {}
                 Err(Some(err)) => return Err(err),
                 Err(None) => {
+                    let arg = arg
+                        .to_str()
+                        .ok_or_else(|| Error::InvalidUtf8(arg.clone()))?;
                     let subcmd = S::Subcommand::try_parse_with_name(arg, args)?;
                     return state.finish(Some(subcmd));
                 }

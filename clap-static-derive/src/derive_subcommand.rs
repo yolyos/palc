@@ -1,8 +1,7 @@
 use darling::FromDeriveInput;
-use heck::ToKebabCase;
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
-use syn::{DeriveInput, Generics, Ident, LitByteStr};
+use syn::{DeriveInput, Generics, Ident};
 
 use crate::common::{CommandVariant, wrap_anon_item};
 use crate::derive_parser::ParserStateDefImpl;
@@ -27,7 +26,7 @@ pub(crate) fn expand(input: DeriveInput) -> TokenStream {
 
 struct SubcommandImpl {
     enum_name: Ident,
-    variants: Vec<(String, Span, ParserStateDefImpl)>,
+    variants: Vec<(String, ParserStateDefImpl)>,
 }
 
 fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
@@ -52,11 +51,8 @@ fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
                 &variant.fields.fields,
             )?;
             state.output_ctor = Some(quote!(#enum_name :: #variant_name));
-            Ok((
-                variant_name.to_string().to_kebab_case(),
-                variant_name.span(),
-                state,
-            ))
+            let arg_name = heck::AsKebabCase(variant_name.to_string()).to_string();
+            Ok((arg_name, state))
         })
         .collect::<syn::Result<Vec<_>>>()?;
 
@@ -72,11 +68,9 @@ impl ToTokens for SubcommandImpl {
             enum_name,
             variants,
         } = self;
-        let name_byte_strs = variants
-            .iter()
-            .map(|(name, span, _)| LitByteStr::new(name.as_bytes(), *span));
-        let states = variants.iter().map(|(_, _, state)| state);
-        let state_names = variants.iter().map(|(_, _, state)| &state.state_name);
+        let name_strs = variants.iter().map(|(arg_name, _)| arg_name);
+        let states = variants.iter().map(|(_, state)| state);
+        let state_names = variants.iter().map(|(_, state)| &state.state_name);
 
         tokens.extend(quote! {
             #(#states)*
@@ -84,11 +78,11 @@ impl ToTokens for SubcommandImpl {
             impl __rt::Subcommand for #enum_name {}
             impl __rt::CommandInternal for #enum_name {
                 fn try_parse_with_name(
-                    __name: __rt::OsString,
+                    __name: &__rt::str,
                     __args: &mut __rt::ArgsIter<'_>,
                 ) -> __rt::Result<Self, __rt::Error> {
-                    match __rt::OsStr::as_encoded_bytes(&__name) {
-                        #(#name_byte_strs => __rt::try_parse_with_state::<#state_names>(__args),)*
+                    match __name {
+                        #(#name_strs => __rt::try_parse_with_state::<#state_names>(__args),)*
                         _ => __rt::extra_positional(__name),
                     }
                 }

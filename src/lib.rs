@@ -29,8 +29,8 @@ pub mod __private {
     };
     pub use crate::{Error, FromValue, Parser, Subcommand};
 
-    pub fn extra_positional<T>(arg: OsString) -> Result<T, Error> {
-        Err(Error::UnknownArgument(arg))
+    pub fn extra_positional<T>(arg: &str) -> Result<T, Error> {
+        Err(Error::UnknownArgument(arg.into()))
     }
 
     pub fn require_subcmd<T>(subcmd: Option<T>) -> Result<T, Error> {
@@ -109,8 +109,8 @@ pub trait Subcommand: Sized + 'static + CommandInternal {}
 
 impl Subcommand for Infallible {}
 impl CommandInternal for Infallible {
-    fn try_parse_with_name(name: OsString, _args: &mut ArgsIter<'_>) -> Result<Self, Error> {
-        Err(Error::UnknownArgument(name))
+    fn try_parse_with_name(name: &str, _args: &mut ArgsIter<'_>) -> Result<Self, Error> {
+        Err(Error::UnknownArgument(name.into()))
     }
 }
 
