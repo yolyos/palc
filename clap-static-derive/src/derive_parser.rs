@@ -233,13 +233,26 @@ impl ToTokens for ParserStateDefImpl {
         } = self;
         let output_ctor = output_ctor.as_ref().unwrap_or(&self.output_ty);
 
+        let mut check_missing =
+            fields
+                .iter()
+                .filter_map(|f| {
+                    let name = &f.name;
+                    let display_name = &f.display_name;
+                    f.needs_unwrap.then(|| quote! {
+                        if self.#name.is_none() {
+                            return __rt::Err(__rt::Error::MissingRequiredArgument(#display_name));
+                        }
+                    })
+                })
+                .collect::<TokenStream>();
+
         let field_names = fields.iter().map(|f| &f.name).collect::<Vec<_>>();
         let field_tys = fields.iter().map(|f| &f.state_ty);
         let field_finishes = fields.iter().map(|f| {
             let name = &f.name;
-            let display_name = &f.display_name;
             if f.needs_unwrap {
-                quote! { __rt::require_arg(self.#name, #display_name)? }
+                quote! { self.#name.unwrap() }
             } else {
                 quote! { self.#name }
             }
@@ -253,10 +266,12 @@ impl ToTokens for ParserStateDefImpl {
                 needs_unwrap,
             }) => {
                 if *needs_unwrap {
-                    (
-                        ty.clone(),
-                        quote! { #field : __rt::require_subcmd(__subcmd)? },
-                    )
+                    check_missing.extend(quote! {
+                        if __subcmd.is_none() {
+                            return __rt::Err(__rt::Error::MissingRequiredSubcommand);
+                        }
+                    });
+                    (ty.clone(), quote! { #field : __subcmd.unwrap() })
                 } else {
                     (ty.clone(), quote! { #field : __subcmd })
                 }
@@ -289,6 +304,7 @@ impl ToTokens for ParserStateDefImpl {
                 fn finish(self, __subcmd: __rt::Option<Self::Subcommand>)
                     -> __rt::Result<Self::Output, __rt::Error>
                 {
+                    #check_missing
                     __rt::Ok(#output_ctor {
                         #(#field_names : #field_finishes,)*
                         #subcommand_finish

@@ -7,7 +7,7 @@ struct MyCli {
     name: Option<String>,
 
     #[arg(short, long)]
-    config: Option<PathBuf>,
+    config: PathBuf,
 
     #[arg(short = 'v')]
     debug: bool,
@@ -31,7 +31,7 @@ fn smoke() {
         args,
         MyCli {
             name: Some("bar".into()),
-            config: Some("foo".into()),
+            config: "foo".into(),
             debug: false,
             command: Some(Commands::Test { list: true }),
         }
