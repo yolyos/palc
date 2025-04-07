@@ -53,6 +53,7 @@ pub enum Error {
     UnknownArgument(OsString),
     UnexpectedValue(OsString, OsString),
     MissingValue(String),
+    FromValue(String),
 }
 
 impl std::error::Error for Error {}
@@ -73,6 +74,9 @@ impl fmt::Display for Error {
             Error::MissingValue(name) => {
                 write!(f, "missing value for {name}")
             }
+            Error::FromValue(s) => {
+                write!(f, "cannot parse from {s:?}")
+            }
         }
     }
 }
@@ -82,7 +86,10 @@ pub trait Parser: Sized + 'static + ArgsInternal {
     fn parse() -> Self {
         match Self::try_parse_from(std::env::args_os()) {
             Ok(v) => v,
-            Err(_err) => todo!(),
+            Err(err) => {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -126,5 +133,23 @@ impl sealed::Sealed for String {}
 impl FromValue for String {
     fn try_from_value(v: Cow<'_, OsStr>) -> Result<Self, Error> {
         v.into_owned().into_string().map_err(Error::InvalidUtf8)
+    }
+}
+
+impl sealed::Sealed for f64 {}
+impl FromValue for f64 {
+    fn try_from_value(s: Cow<'_, OsStr>) -> Result<Self, Error> {
+        s.to_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::FromValue(s.to_string_lossy().into_owned()))
+    }
+}
+
+impl sealed::Sealed for usize {}
+impl FromValue for usize {
+    fn try_from_value(s: Cow<'_, OsStr>) -> Result<Self, Error> {
+        s.to_str()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(|| Error::FromValue(s.to_string_lossy().into_owned()))
     }
 }
