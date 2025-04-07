@@ -85,10 +85,10 @@ impl ToTokens for SubcommandImpl {
             impl __rt::CommandInternal for #enum_name {
                 fn try_parse_with_name(
                     __name: __rt::OsString,
-                    __iter: &mut dyn __rt::Iterator<Item = __rt::OsString>,
+                    __args: &mut __rt::ArgsIter<'_>,
                 ) -> __rt::Result<Self, __rt::Error> {
                     match __rt::OsStr::as_encoded_bytes(&__name) {
-                        #(#name_byte_strs => __rt::try_parse_with_state::<#state_names>(__iter),)*
+                        #(#name_byte_strs => __rt::try_parse_with_state::<#state_names>(__args),)*
                         _ => __rt::extra_positional(__name),
                     }
                 }

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use crate::internal::{ArgsInternal, CommandInternal, try_parse_with_state};
 
 pub use clap_static_derive::{Parser, Subcommand};
+use internal::ArgsIter;
 
 mod internal;
 
@@ -23,17 +24,10 @@ pub mod __private {
     pub use {Default, Err, Iterator, None, Ok, Option, Result, Some, char, str, usize};
 
     pub use crate::internal::{
-        ArgsInternal, CommandInternal, FeedNamed, FeedNamedOk, FeedUnnamed, ParserState,
+        ArgsInternal, ArgsIter, CommandInternal, FeedNamed, FeedNamedOk, FeedUnnamed, ParserState,
         try_parse_with_state,
     };
     pub use crate::{Error, FromValue, Parser, Subcommand};
-
-    pub fn require_arg<T>(v: Option<T>, name: &'static str) -> Result<T, Error> {
-        match v {
-            Some(v) => Ok(v),
-            None => Err(Error::MissingRequiredArgument(name)),
-        }
-    }
 
     pub fn extra_positional<T>(arg: OsString) -> Result<T, Error> {
         Err(Error::UnknownArgument(arg))
@@ -54,10 +48,10 @@ pub mod __private {
 #[derive(Debug)]
 pub enum Error {
     InvalidUtf8(OsString),
-    MissingRequiredArgument(&'static str),
+    MissingRequiredArgument(String),
     MissingRequiredSubcommand,
     UnknownArgument(OsString),
-    UnexpectedValue(String, OsString),
+    UnexpectedValue(OsString, OsString),
     MissingValue(String),
 }
 
@@ -70,7 +64,11 @@ impl fmt::Display for Error {
             Error::MissingRequiredSubcommand => write!(f, "missing required subcommand"),
             Error::UnknownArgument(s) => write!(f, "unknown argument: {s:?}"),
             Error::UnexpectedValue(name, value) => {
-                write!(f, "unexpected value for {value:?} for {name}")
+                write!(
+                    f,
+                    "unexpected value for {value:?} for {}",
+                    name.to_string_lossy()
+                )
             }
             Error::MissingValue(name) => {
                 write!(f, "missing value for {name}")
@@ -93,7 +91,9 @@ pub trait Parser: Sized + 'static + ArgsInternal {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        try_parse_with_state::<Self::__State>(&mut iter.into_iter().skip(1).map(|s| s.into()))
+        let mut iter = iter.into_iter().skip(1).map(|s| s.into());
+        let mut args = ArgsIter::new(&mut iter);
+        try_parse_with_state::<Self::__State>(&mut args)
     }
 }
 
@@ -102,10 +102,7 @@ pub trait Subcommand: Sized + 'static + CommandInternal {}
 
 impl Subcommand for Infallible {}
 impl CommandInternal for Infallible {
-    fn try_parse_with_name(
-        name: OsString,
-        _iter: &mut dyn Iterator<Item = OsString>,
-    ) -> Result<Self, Error> {
+    fn try_parse_with_name(name: OsString, _args: &mut ArgsIter<'_>) -> Result<Self, Error> {
         Err(Error::UnknownArgument(name))
     }
 }

@@ -5,5 +5,6 @@ edition = "2024"
 
 [dependencies]
 clap-static-derive.path = "./clap-static-derive"
+os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_os_str"] }
 
 [workspace]

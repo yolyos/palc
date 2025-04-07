@@ -241,7 +241,7 @@ impl ToTokens for ParserStateDefImpl {
                     let display_name = &f.display_name;
                     f.needs_unwrap.then(|| quote! {
                         if self.#name.is_none() {
-                            return __rt::Err(__rt::Error::MissingRequiredArgument(#display_name));
+                            return __rt::Err(__rt::Error::MissingRequiredArgument(__rt::str::to_owned(#display_name)));
                         }
                     })
                 })

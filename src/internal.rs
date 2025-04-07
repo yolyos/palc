@@ -1,5 +1,8 @@
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
+use std::num::NonZero;
+
+use os_str_bytes::OsStrBytesExt;
 
 use super::Error;
 
@@ -31,86 +34,157 @@ pub trait ParserState: Sized + Default + 'static {
 }
 
 pub trait CommandInternal: Sized {
-    fn try_parse_with_name(
-        name: OsString,
-        iter: &mut dyn Iterator<Item = OsString>,
-    ) -> Result<Self, Error>;
+    fn try_parse_with_name(name: OsString, args: &mut ArgsIter<'_>) -> Result<Self, Error>;
 }
 
-pub fn try_parse_with_state<S: ParserState>(
-    iter: &mut dyn Iterator<Item = OsString>,
-) -> Result<S::Output, Error> {
+pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S::Output, Error> {
     let mut state = S::default();
-    while let Some(mut arg) = iter.next() {
-        let argb = arg.as_encoded_bytes();
-        if argb == b"--" {
-            todo!()
-        } else if argb == b"-" {
-            todo!()
-        } else if argb.starts_with(b"--") {
-            let arg = arg
-                .to_str()
-                .ok_or_else(|| Error::InvalidUtf8(arg.to_os_string()))?;
-            let (name, value) = match arg.split_once("=") {
-                Some((name, value)) => (name, Some(value)),
-                None => (arg, None),
-            };
-            match state.feed_named(name) {
-                Err(err) => return Err(err.unwrap_or_else(|| Error::UnknownArgument(arg.into()))),
-                Ok(FeedNamedOk::Arg0) => {
-                    if let Some(v) = value {
-                        return Err(Error::UnexpectedValue(name.into(), v.into()));
-                    }
+    while let Some(arg) = args.cache_next_arg()? {
+        match arg {
+            Arg::DashDash => todo!(),
+            Arg::Named(name) => match state.feed_named(name) {
+                Ok(FeedNamedOk::Arg0) => args.check_no_value()?,
+                Ok(FeedNamedOk::Arg1(f)) => {
+                    let val = args.take_value()?;
+                    f(&mut state, val)?;
                 }
-                Ok(FeedNamedOk::Arg1(updater)) => {
-                    let value = match value {
-                        Some(v) => Cow::Borrowed(OsStr::new(v)),
-                        None => Cow::Owned(iter.next().ok_or(Error::MissingValue(name.into()))?),
-                    };
-                    updater(&mut state, value)?
-                }
-            }
-        } else if argb.starts_with(b"-") {
-            let mut arg = &arg
-                .to_str()
-                .ok_or_else(|| Error::InvalidUtf8(arg.to_os_string()))?[1..];
-
-            // Iterate over each `char`, but chunk it as `&str` streams.
-            while !arg.is_empty() {
-                let mut ch_iter = arg.char_indices();
-                ch_iter.next();
-                let name = &arg[..arg.len() - ch_iter.as_str().len()];
-                arg = ch_iter.as_str();
-
-                match state.feed_named(name) {
-                    Ok(FeedNamedOk::Arg0) => {}
-                    Err(None) => return Err(Error::UnknownArgument(arg.into())),
-                    Err(Some(err)) => return Err(err),
-                    Ok(FeedNamedOk::Arg1(updater)) => {
-                        let value = if arg.is_empty() {
-                            Cow::Owned(
-                                iter.next()
-                                    .ok_or_else(|| Error::MissingValue(name.into()))?,
-                            )
-                        } else {
-                            let arg = arg.strip_prefix("=").unwrap_or(arg);
-                            Cow::Borrowed(OsStr::new(arg))
-                        };
-                        updater(&mut state, value)?;
-                        break;
-                    }
-                }
-            }
-        } else {
-            match state.feed_unnamed(&mut arg) {
+                Err(None) => return Err(Error::UnknownArgument(name.into())),
+                Err(Some(err)) => return Err(err),
+            },
+            Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg) {
                 Ok(()) => {}
                 Err(Some(err)) => return Err(err),
                 Err(None) => {
-                    let subcmd = S::Subcommand::try_parse_with_name(arg, iter)?;
+                    let subcmd = S::Subcommand::try_parse_with_name(arg, args)?;
                     return state.finish(Some(subcmd));
                 }
-            }
+            },
         }
     }
     state.finish(None)
+}
+
+pub struct ArgsIter<'a> {
+    iter: &'a mut dyn Iterator<Item = OsString>,
+    cur_input_arg: OsString,
+    state: ArgsState,
+}
+
+enum ArgsState {
+    Unnamed,
+    Long { eq_pos: Option<NonZero<usize>> },
+    Short { next_pos: usize },
+}
+
+enum Arg<'a> {
+    DashDash,
+    Named(&'a str),
+    Unnamed(OsString),
+}
+
+impl<'a> ArgsIter<'a> {
+    pub(crate) fn new(iter: &'a mut dyn Iterator<Item = OsString>) -> Self {
+        Self {
+            iter,
+            cur_input_arg: OsString::new(),
+            state: ArgsState::Unnamed,
+        }
+    }
+
+    fn check_no_value(&mut self) -> Result<(), Error> {
+        // This only fail for long arguments with joined value: `--long=[..]`.
+        match self.state {
+            ArgsState::Long { eq_pos: Some(pos) } => Err(Error::UnexpectedValue(
+                self.cur_input_arg.index(..pos.get()).to_os_string(),
+                self.cur_input_arg.index(pos.get() + 1..).to_os_string(),
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Retrieve the value for the current named argument, either after `=` or fetch from the next
+    /// input argument.
+    fn take_value(&mut self) -> Result<Cow<'_, OsStr>, Error> {
+        match self.state {
+            ArgsState::Long { eq_pos: Some(pos) } => {
+                Ok(Cow::Borrowed(self.cur_input_arg.index(pos.get() + 1..)))
+            }
+            ArgsState::Short { next_pos } => {
+                Ok(Cow::Borrowed(self.cur_input_arg.index(next_pos..)))
+            }
+            ArgsState::Long { eq_pos: None } => {
+                let arg = self.iter.next().ok_or_else(|| {
+                    Error::MissingRequiredArgument(
+                        // Long argument must be UTF-8.
+                        std::mem::take(&mut self.cur_input_arg)
+                            .into_string()
+                            .unwrap(),
+                    )
+                })?;
+                Ok(Cow::Owned(arg))
+            }
+            ArgsState::Unnamed => unreachable!(),
+        }
+    }
+
+    /// Cache the next logical argument (short or long).
+    fn cache_next_arg(&mut self) -> Result<Option<Arg<'_>>, Error> {
+        // Iterate the next short argument if we are inside a group of it.
+        match self.state {
+            ArgsState::Short { next_pos } if next_pos != self.cur_input_arg.len() => {
+                let rest = &self.cur_input_arg.as_encoded_bytes()[next_pos..];
+                // FIXME: More efficient way to get the next UTF-8 char?
+                // UTF-8 char has encoded length 1..=4
+                for len in 1..4 {
+                    match std::str::from_utf8(&rest[..len]) {
+                        Ok(s) => {
+                            // Invariant: `prev_end..prev_end+len` is checked to be valid UTF-8.
+                            self.state = ArgsState::Short {
+                                next_pos: next_pos + len,
+                            };
+                            return Ok(Some(Arg::Named(s)));
+                        }
+                        // Incomplete encoding.
+                        Err(e) if e.error_len().is_none() => {}
+                        Err(_) => break,
+                    }
+                }
+                return Err(Error::InvalidUtf8(
+                    self.cur_input_arg.index(next_pos..).to_os_string(),
+                ));
+            }
+            _ => {}
+        }
+
+        // Otherwise, fetch the next input argument.
+        let Some(s) = self.iter.next() else {
+            return Ok(None);
+        };
+        self.cur_input_arg = s;
+        let argb = self.cur_input_arg.as_encoded_bytes();
+        self.state = ArgsState::Unnamed;
+
+        Ok(Some(if argb == b"-" {
+            Arg::Unnamed(std::mem::take(&mut self.cur_input_arg))
+        } else if argb == b"--" {
+            Arg::DashDash
+        } else if argb.starts_with(b"--") {
+            let end = if let Some(pos) = argb.iter().position(|&b| b == b'=') {
+                self.state = ArgsState::Long {
+                    eq_pos: NonZero::new(pos),
+                };
+                pos
+            } else {
+                self.state = ArgsState::Long { eq_pos: None };
+                argb.len()
+            };
+            let s = self.cur_input_arg.index(..end);
+            Arg::Named(s.to_str().ok_or_else(|| Error::InvalidUtf8(s.into()))?)
+        } else if argb.starts_with(b"-") {
+            self.state = ArgsState::Short { next_pos: 1 };
+            return self.cache_next_arg();
+        } else {
+            Arg::Unnamed(std::mem::take(&mut self.cur_input_arg))
+        }))
+    }
 }
