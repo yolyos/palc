@@ -1,6 +1,5 @@
 use darling::FromDeriveInput;
 use darling::util::Override;
-use heck::AsKebabCase;
 use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote};
 use syn::punctuated::Punctuated;
@@ -72,13 +71,23 @@ pub struct ParserStateDefImpl {
     pub state_name: Ident,
     pub output_ty: TokenStream,
     pub output_ctor: Option<TokenStream>,
-    fields: Vec<Ident>,
-    field_tys: Vec<TokenStream>,
-    field_finishes: Vec<TokenStream>,
+    fields: Vec<FieldInfo>,
     match_named_arms: TokenStream,
     handle_unnamed: TokenStream,
-    subcommand_ty: TokenStream,
-    subcommand_finish: Option<TokenStream>,
+    subcommand: Option<SubcommandInfo>,
+}
+
+struct FieldInfo {
+    name: Ident,
+    state_ty: TokenStream,
+    display_name: String,
+    needs_unwrap: bool,
+}
+
+struct SubcommandInfo {
+    field: Ident,
+    ty: TokenStream,
+    needs_unwrap: bool,
 }
 
 pub fn expand_state_def_impl(
@@ -86,24 +95,23 @@ pub fn expand_state_def_impl(
     output_ty: TokenStream,
     input_fields: &[ArgField],
 ) -> syn::Result<ParserStateDefImpl> {
-    let mut state_fields = Vec::new();
-    let mut state_field_tys = Vec::new();
-    let mut field_finishes = Vec::new();
-
-    let mut subcommand_ty = quote!(__rt::Infallible);
-    let mut subcommand_finish = None;
-
-    let mut match_named_arms = TokenStream::new();
-    let mut handle_unnamed = TokenStream::new();
+    let mut out = ParserStateDefImpl {
+        state_name,
+        output_ty,
+        output_ctor: None,
+        fields: Vec::with_capacity(input_fields.len()),
+        match_named_arms: TokenStream::new(),
+        handle_unnamed: TokenStream::new(),
+        subcommand: None,
+    };
 
     for field in input_fields {
         let field_name = field.ident.clone().expect("checked by darling");
         let field_name_str = field_name.to_string();
-        let field_name_lit = syn::LitStr::new(&field_name_str, field_name.span());
         let field_ty = &field.ty;
 
         // This is unused for subcommands.
-        let (state_field_ty, parser, finish) = match field.arg_ty_kind() {
+        let (state_ty, parser, needs_unwrap) = match field.arg_ty_kind() {
             ArgTyKind::Bool => {
                 if let ArgOrCommand::None = &field.attrs {
                     return Err(syn::Error::new(
@@ -111,52 +119,52 @@ pub fn expand_state_def_impl(
                         "positional arguments cannot be `bool`",
                     ));
                 }
-                (
-                    quote! { bool },
-                    TokenStream::new(),
-                    quote! { self.#field_name },
-                )
+                (quote! { bool }, TokenStream::new(), false)
             }
             ArgTyKind::Option(subty) => (
                 quote! { #field_ty },
                 quote! { <#subty as __rt::FromValue>::try_from_value },
-                quote! { self.#field_name },
+                false,
             ),
             ArgTyKind::Convert => (
-                quote!(Option<#field_ty>),
+                quote! { __rt::Option<#field_ty> },
                 quote! { <#field_ty as __rt::FromValue>::try_from_value },
-                quote! { __rt::require_arg(self.#field_name, #field_name_lit)? },
+                true,
             ),
         };
+
+        let mut display_name = String::new();
 
         match &field.attrs {
             // Unnamed (positional) arguments.
             ArgOrCommand::None => {
-                handle_unnamed.extend(quote! {
-                    if let __rt::None = self.#field_name {
+                display_name = heck::AsShoutySnakeCase(field_name_str).to_string();
+                out.handle_unnamed.extend(quote! {
+                    if self.#field_name.is_none() {
                         self.#field_name = __rt::Some(#parser(__rt::take_arg(__arg))?);
                         return __rt::Ok(());
                     }
                 });
-                state_fields.push(field_name);
-                state_field_tys.push(state_field_ty);
-                field_finishes.push(finish);
             }
             // Named arguments.
             ArgOrCommand::Arg(Arg { long, short }) => {
                 let mut pats = <Punctuated<String, Token![|]>>::new();
-                if let Some(name) = long {
-                    let pat = match name {
-                        Override::Inherit => format!("--{}", AsKebabCase(&field_name_str)),
-                        Override::Explicit(s) => format!("--{s}"),
-                    };
-                    pats.push(pat);
-                }
+
                 if let Some(ch) = short {
                     let ch = ch
                         .clone()
                         .unwrap_or_else(|| field_name_str.chars().next().expect("must have name"));
+                    display_name = format!("-{ch}");
                     pats.push(ch.to_string());
+                }
+                if let Some(name) = long {
+                    let long_name = match name {
+                        Override::Inherit => format!("--{}", heck::AsKebabCase(&field_name_str)),
+                        Override::Explicit(s) => format!("--{s}"),
+                    };
+                    // Prefer long names for display.
+                    display_name = long_name.clone();
+                    pats.push(long_name);
                 }
                 assert!(!pats.is_empty(), "validated by darling");
 
@@ -173,70 +181,96 @@ pub fn expand_state_def_impl(
                     },
                 };
 
-                state_fields.push(field_name);
-                state_field_tys.push(state_field_ty);
-                match_named_arms.extend(quote! { #pats => #handler, });
-                field_finishes.push(finish);
+                out.match_named_arms.extend(quote! { #pats => #handler, });
             }
             // Sub-struct injection.
             ArgOrCommand::Command(cmd) => {
                 assert!(cmd.subcommand, "validated");
-                if subcommand_finish.is_some() {
+                if out.subcommand.is_some() {
                     return Err(Error::new(
                         field_name.span(),
                         "duplicated `#[command(subcommand)]`",
                     ));
                 }
-                if let Some(arg_ty) = strip_ty_ctor(field_ty, TY_OPTION) {
-                    subcommand_ty = quote! { #arg_ty };
-                    subcommand_finish = Some(quote! { #field_name: __subcmd });
+                out.subcommand = Some(if let Some(arg_ty) = strip_ty_ctor(field_ty, TY_OPTION) {
+                    SubcommandInfo {
+                        field: field_name.clone(),
+                        ty: quote! { #arg_ty },
+                        needs_unwrap: false,
+                    }
                 } else {
-                    subcommand_ty = quote! { #field_ty };
-                    subcommand_finish =
-                        Some(quote! { #field_name: __rt::require_subcmd(__subcmd)? });
-                }
+                    SubcommandInfo {
+                        field: field_name.clone(),
+                        ty: quote! { #field_ty },
+                        needs_unwrap: true,
+                    }
+                });
+                continue;
             }
         }
+
+        out.fields.push(FieldInfo {
+            name: field_name,
+            state_ty,
+            display_name,
+            needs_unwrap,
+        });
     }
 
-    Ok(ParserStateDefImpl {
-        state_name,
-        output_ty,
-        output_ctor: None,
-        fields: state_fields,
-        field_tys: state_field_tys,
-        field_finishes,
-        match_named_arms,
-        handle_unnamed,
-        subcommand_ty,
-        subcommand_finish,
-    })
+    Ok(out)
 }
 
 impl ToTokens for ParserStateDefImpl {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
-            state_name: name,
+            state_name,
             output_ty,
             output_ctor,
             fields,
-            field_tys,
-            field_finishes,
             match_named_arms,
             handle_unnamed,
-            subcommand_ty,
-            subcommand_finish,
+            subcommand,
         } = self;
         let output_ctor = output_ctor.as_ref().unwrap_or(&self.output_ty);
 
+        let field_names = fields.iter().map(|f| &f.name).collect::<Vec<_>>();
+        let field_tys = fields.iter().map(|f| &f.state_ty);
+        let field_finishes = fields.iter().map(|f| {
+            let name = &f.name;
+            let display_name = &f.display_name;
+            if f.needs_unwrap {
+                quote! { __rt::require_arg(self.#name, #display_name)? }
+            } else {
+                quote! { self.#name }
+            }
+        });
+
+        let (subcommand_ty, subcommand_finish) = match subcommand {
+            None => (quote! { __rt::Infallible }, TokenStream::new()),
+            Some(SubcommandInfo {
+                field,
+                ty,
+                needs_unwrap,
+            }) => {
+                if *needs_unwrap {
+                    (
+                        ty.clone(),
+                        quote! { #field : __rt::require_subcmd(__subcmd)? },
+                    )
+                } else {
+                    (ty.clone(), quote! { #field : __subcmd })
+                }
+            }
+        };
+
         tokens.extend(quote! {
             #[derive(Default)]
-            struct #name {
-                #(#fields : #field_tys,)*
+            struct #state_name {
+                #(#field_names : #field_tys,)*
             }
 
             #[automatically_derived]
-            impl __rt::ParserState for #name {
+            impl __rt::ParserState for #state_name {
                 type Output = #output_ty;
                 type Subcommand = #subcommand_ty;
 
@@ -256,7 +290,7 @@ impl ToTokens for ParserStateDefImpl {
                     -> __rt::Result<Self::Output, __rt::Error>
                 {
                     __rt::Ok(#output_ctor {
-                        #(#fields : #field_finishes,)*
+                        #(#field_names : #field_finishes,)*
                         #subcommand_finish
                     })
                 }
