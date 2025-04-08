@@ -117,6 +117,7 @@ pub enum ArgOrCommand {
 
 #[derive(FromMeta)]
 #[darling(and_then = Arg::validate)]
+#[cfg_attr(feature = "__test-allow-unknown-fields", darling(allow_unknown_fields))]
 pub struct Arg {
     pub long: Option<Override<String>>,
     pub short: Option<Override<char>>,

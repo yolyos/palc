@@ -6,6 +6,9 @@ edition = "2024"
 [lib]
 proc-macro = true
 
+[features]
+__test-allow-unknown-fields = []
+
 [dependencies]
 darling = "0.20.11"
 heck = "0.5.0"
