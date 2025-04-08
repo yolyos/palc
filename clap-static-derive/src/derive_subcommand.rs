@@ -4,7 +4,7 @@ use quote::{ToTokens, format_ident, quote};
 use syn::{DeriveInput, Generics, Ident, Visibility};
 
 use crate::common::{CommandVariant, wrap_anon_item};
-use crate::derive_parser::ParserStateDefImpl;
+use crate::derive_args::ParserStateDefImpl;
 
 #[derive(FromDeriveInput)]
 #[darling(supports(enum_named))]
@@ -46,7 +46,7 @@ fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
         .into_iter()
         .map(|variant| {
             let variant_name = variant.ident;
-            let mut state = crate::derive_parser::expand_state_def_impl(
+            let mut state = crate::derive_args::expand_state_def_impl(
                 def.vis.clone(),
                 format_ident!("{enum_name}{variant_name}State", span = variant_name.span()),
                 enum_name.to_token_stream(),

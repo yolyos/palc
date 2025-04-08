@@ -3,7 +3,7 @@ use std::ffi::OsString;
 
 use crate::internal::{ArgsInternal, CommandInternal, try_parse_with_state};
 
-pub use clap_static_derive::{Parser, Subcommand, ValueEnum};
+pub use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 use error::ErrorKind;
 use internal::ArgsIter;
 
@@ -36,7 +36,7 @@ pub mod __private {
         ArgsInternal, ArgsIter, CommandInternal, FeedNamed, FeedNamedOk, FeedUnnamed, ParserState,
         try_parse_with_state,
     };
-    pub use crate::{Parser, Result, Subcommand};
+    pub use crate::{Args, Parser, Result, Subcommand};
 
     pub fn unknown_subcommand<T>(arg: &str) -> Result<T> {
         Err(ErrorKind::UnknownSubcommand(arg.into()).into())
@@ -86,6 +86,9 @@ pub trait Parser: Sized + 'static + ArgsInternal {
         try_parse_with_state::<Self::__State>(&mut args)
     }
 }
+
+/// A group of arguments for composing larger inferface.
+pub trait Args: Sized + 'static + ArgsInternal {}
 
 /// A subcommand enum.
 pub trait Subcommand: Sized + 'static + CommandInternal {}

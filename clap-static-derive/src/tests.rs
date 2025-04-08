@@ -17,7 +17,7 @@ fn derive_parser() {
         }
     };
 
-    let output = crate::derive_parser::expand(input);
+    let output = crate::derive_args::expand(input, true);
     println!("{output}");
     let text = prettyplease::unparse(&syn::parse2(output).unwrap());
     println!("{text}");

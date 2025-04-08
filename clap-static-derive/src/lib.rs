@@ -5,14 +5,20 @@ use syn::DeriveInput;
 mod tests;
 
 mod common;
-mod derive_parser;
+mod derive_args;
 mod derive_subcommand;
 mod derive_value_enum;
 
 #[proc_macro_derive(Parser, attributes(arg, command))]
 pub fn derive_parser(tts: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(tts as DeriveInput);
-    derive_parser::expand(input).into()
+    derive_args::expand(input, true).into()
+}
+
+#[proc_macro_derive(Args, attributes(arg, command))]
+pub fn derive_args(tts: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(tts as DeriveInput);
+    derive_args::expand(input, false).into()
 }
 
 #[proc_macro_derive(Subcommand, attributes(arg, command))]

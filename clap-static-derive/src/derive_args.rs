@@ -12,28 +12,30 @@ use crate::common::{
 
 #[derive(FromDeriveInput)]
 #[darling(supports(struct_named))]
-pub struct ParserItemDef {
+pub struct ArgsItemDef {
     pub vis: Visibility,
     pub ident: Ident,
     pub generics: Generics,
     pub data: darling::ast::Data<(), ArgField>,
 }
 
-pub fn expand(input: DeriveInput) -> TokenStream {
-    match ParserItemDef::from_derive_input(&input) {
+pub fn expand(input: DeriveInput, is_parser: bool) -> TokenStream {
+    match ArgsItemDef::from_derive_input(&input) {
         Err(err) => err.write_errors(),
-        Ok(def) => match expand_parser_impl(def) {
+        Ok(def) => match expand_args_impl(def, is_parser) {
             Ok(tts) => wrap_anon_item(tts),
             Err(err) => err.into_compile_error(),
         },
     }
 }
 
-pub struct ParserImpl {
+/// For `derive({Args,Parser})`.
+pub struct ArgsImpl {
+    is_parser: bool,
     state: ParserStateDefImpl,
 }
 
-pub fn expand_parser_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
+fn expand_args_impl(def: ArgsItemDef, is_parser: bool) -> syn::Result<ArgsImpl> {
     let fields = def.data.take_struct().expect("checked by darling").fields;
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
@@ -46,18 +48,25 @@ pub fn expand_parser_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
     let state = expand_state_def_impl(def.vis, state_name, struct_name, &fields)?;
-    Ok(ParserImpl { state })
+    Ok(ArgsImpl { is_parser, state })
 }
 
-impl ToTokens for ParserImpl {
+impl ToTokens for ArgsImpl {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let state = &self.state;
+        let Self { is_parser, state } = self;
         let struct_name = &state.output_ty;
         let state_name = &state.state_name;
 
+        if *is_parser {
+            tokens.extend(quote! {
+                #[automatically_derived]
+                impl __rt::Parser for #struct_name {}
+            });
+        }
+
         tokens.extend(quote! {
             #[automatically_derived]
-            impl __rt::Parser for #struct_name {}
+            impl __rt::Args for #struct_name {}
 
             #[automatically_derived]
             impl __rt::ArgsInternal for #struct_name {
