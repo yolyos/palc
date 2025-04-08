@@ -4,7 +4,7 @@ use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{DeriveInput, Error, Generics, Ident, Token};
+use syn::{DeriveInput, Error, Generics, Ident, Token, Visibility};
 
 use crate::common::{
     Arg, ArgField, ArgOrCommand, ArgTyKind, TY_OPTION, strip_ty_ctor, wrap_anon_item,
@@ -13,6 +13,7 @@ use crate::common::{
 #[derive(FromDeriveInput)]
 #[darling(supports(struct_named))]
 pub struct ParserItemDef {
+    pub vis: Visibility,
     pub ident: Ident,
     pub generics: Generics,
     pub data: darling::ast::Data<(), ArgField>,
@@ -44,7 +45,7 @@ pub fn expand_parser_impl(def: ParserItemDef) -> syn::Result<ParserImpl> {
 
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
-    let state = expand_state_def_impl(state_name, struct_name, &fields)?;
+    let state = expand_state_def_impl(def.vis, state_name, struct_name, &fields)?;
     Ok(ParserImpl { state })
 }
 
@@ -69,6 +70,7 @@ impl ToTokens for ParserImpl {
 }
 
 pub struct ParserStateDefImpl {
+    pub vis: Visibility,
     pub state_name: Ident,
     pub output_ty: TokenStream,
     pub output_ctor: Option<TokenStream>,
@@ -93,11 +95,13 @@ struct SubcommandInfo {
 }
 
 pub fn expand_state_def_impl(
+    vis: Visibility,
     state_name: Ident,
     output_ty: TokenStream,
     input_fields: &[ArgField],
 ) -> syn::Result<ParserStateDefImpl> {
     let mut out = ParserStateDefImpl {
+        vis,
         state_name,
         output_ty,
         output_ctor: None,
@@ -256,6 +260,7 @@ pub fn expand_state_def_impl(
 impl ToTokens for ParserStateDefImpl {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
+            vis,
             state_name,
             output_ty,
             output_ctor,
@@ -318,8 +323,10 @@ impl ToTokens for ParserStateDefImpl {
         };
 
         tokens.extend(quote! {
+            // Inherited visibility is needed to avoid "private type in public interface".
+            // It is always invisible from user site because we are in an anonymous scope.
             #[derive(Default)]
-            struct #state_name {
+            #vis struct #state_name {
                 #(#field_names : #field_tys,)*
             }
 
