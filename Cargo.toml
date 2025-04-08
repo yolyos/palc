@@ -16,6 +16,10 @@ os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_o
 name = "criterion-static"
 required-features = ["__test-allow-unknown-fields"]
 
+[[example]]
+name = "deno-static"
+required-features = ["__test-allow-unknown-fields"]
+
 [dev-dependencies]
 argh = { version = "0.1.13", default-features = false }
 clap = { version = "4.5.35", default-features = false, features = ["std", "derive", "error-context"] }
