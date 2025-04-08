@@ -80,10 +80,10 @@ impl ToTokens for SubcommandImpl {
                 fn try_parse_with_name(
                     __name: &__rt::str,
                     __args: &mut __rt::ArgsIter<'_>,
-                ) -> __rt::Result<Self, __rt::Error> {
+                ) -> __rt::Result<Self> {
                     match __name {
                         #(#name_strs => __rt::try_parse_with_state::<#state_names>(__args),)*
-                        _ => __rt::extra_positional(__name),
+                        _ => __rt::unknown_subcommand(__name),
                     }
                 }
             }

@@ -4,6 +4,9 @@ use std::num::NonZero;
 
 use os_str_bytes::OsStrBytesExt;
 
+use crate::Result;
+use crate::error::ErrorKind;
+
 use super::Error;
 
 /// This is actually `enum { Ok(_), Unknown, Err(Error) }`,
@@ -12,7 +15,7 @@ use super::Error;
 pub type FeedNamed<S> = Result<FeedNamedOk<S>, Option<Error>>;
 pub enum FeedNamedOk<S> {
     Arg0,
-    Arg1(fn(&mut S, Cow<'_, OsStr>) -> Result<(), Error>),
+    Arg1(fn(&mut S, Cow<'_, OsStr>) -> Result<()>),
 }
 
 /// This is actually `enum { Ok, Unknown, Err(Error) }`. Same as above.
@@ -30,14 +33,14 @@ pub trait ParserState: Sized + Default + 'static {
 
     fn feed_unnamed(&mut self, arg: &mut OsString) -> FeedUnnamed;
 
-    fn finish(self, subcmd: Option<Self::Subcommand>) -> Result<Self::Output, Error>;
+    fn finish(self, subcmd: Option<Self::Subcommand>) -> Result<Self::Output>;
 }
 
 pub trait CommandInternal: Sized {
-    fn try_parse_with_name(name: &str, args: &mut ArgsIter<'_>) -> Result<Self, Error>;
+    fn try_parse_with_name(name: &str, args: &mut ArgsIter<'_>) -> Result<Self>;
 }
 
-pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S::Output, Error> {
+pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S::Output> {
     let mut state = S::default();
     while let Some(arg) = args.cache_next_arg()? {
         match arg {
@@ -48,7 +51,7 @@ pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S
                     let val = args.take_value()?;
                     f(&mut state, val)?;
                 }
-                Err(None) => return Err(Error::UnknownArgument(name.into())),
+                Err(None) => return Err(ErrorKind::UnknownNamedArgument.with_arg(name)),
                 Err(Some(err)) => return Err(err),
             },
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg) {
@@ -57,7 +60,7 @@ pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S
                 Err(None) => {
                     let arg = arg
                         .to_str()
-                        .ok_or_else(|| Error::InvalidUtf8(arg.clone()))?;
+                        .ok_or_else(|| ErrorKind::InvalidUtf8(arg.clone()))?;
                     let subcmd = S::Subcommand::try_parse_with_name(arg, args)?;
                     return state.finish(Some(subcmd));
                 }
@@ -94,20 +97,21 @@ impl<'a> ArgsIter<'a> {
         }
     }
 
-    fn check_no_value(&mut self) -> Result<(), Error> {
+    fn check_no_value(&mut self) -> Result<()> {
         // This only fail for long arguments with joined value: `--long=[..]`.
-        match self.state {
-            ArgsState::Long { eq_pos: Some(pos) } => Err(Error::UnexpectedValue(
-                self.cur_input_arg.index(..pos.get()).to_os_string(),
+        if let ArgsState::Long { eq_pos: Some(pos) } = self.state {
+            Err(ErrorKind::UnexpectedValue(
                 self.cur_input_arg.index(pos.get() + 1..).to_os_string(),
-            )),
-            _ => Ok(()),
+            )
+            .with_arg(self.cur_input_arg.index(..pos.get())))
+        } else {
+            Ok(())
         }
     }
 
     /// Retrieve the value for the current named argument, either after `=` or fetch from the next
     /// input argument.
-    fn take_value(&mut self) -> Result<Cow<'_, OsStr>, Error> {
+    fn take_value(&mut self) -> Result<Cow<'_, OsStr>> {
         match self.state {
             ArgsState::Long { eq_pos: Some(pos) } => {
                 Ok(Cow::Borrowed(self.cur_input_arg.index(pos.get() + 1..)))
@@ -116,14 +120,10 @@ impl<'a> ArgsIter<'a> {
                 Ok(Cow::Borrowed(self.cur_input_arg.index(next_pos..)))
             }
             ArgsState::Long { eq_pos: None } => {
-                let arg = self.iter.next().ok_or_else(|| {
-                    Error::MissingRequiredArgument(
-                        // Long argument must be UTF-8.
-                        std::mem::take(&mut self.cur_input_arg)
-                            .into_string()
-                            .unwrap(),
-                    )
-                })?;
+                let Some(arg) = self.iter.next() else {
+                    let name = std::mem::take(&mut self.cur_input_arg);
+                    return Err(ErrorKind::MissingValue.with_arg(name));
+                };
                 Ok(Cow::Owned(arg))
             }
             ArgsState::Unnamed => unreachable!(),
@@ -131,7 +131,7 @@ impl<'a> ArgsIter<'a> {
     }
 
     /// Cache the next logical argument (short or long).
-    fn cache_next_arg(&mut self) -> Result<Option<Arg<'_>>, Error> {
+    fn cache_next_arg(&mut self) -> Result<Option<Arg<'_>>> {
         // Iterate the next short argument if we are inside a group of it.
         match self.state {
             ArgsState::Short { next_pos } if next_pos != self.cur_input_arg.len() => {
@@ -152,9 +152,10 @@ impl<'a> ArgsIter<'a> {
                         Err(_) => break,
                     }
                 }
-                return Err(Error::InvalidUtf8(
+                return Err(ErrorKind::InvalidUtf8(
                     self.cur_input_arg.index(next_pos..).to_os_string(),
-                ));
+                )
+                .into());
             }
             _ => {}
         }
@@ -182,7 +183,10 @@ impl<'a> ArgsIter<'a> {
                 argb.len()
             };
             let s = self.cur_input_arg.index(..end);
-            Arg::Named(s.to_str().ok_or_else(|| Error::InvalidUtf8(s.into()))?)
+            Arg::Named(
+                s.to_str()
+                    .ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?,
+            )
         } else if argb.starts_with(b"-") {
             self.state = ArgsState::Short { next_pos: 1 };
             return self.cache_next_arg();
