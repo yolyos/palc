@@ -123,12 +123,12 @@ pub fn expand_state_def_impl(
             }
             ArgTyKind::Option(subty) => (
                 quote! { #field_ty },
-                quote! { <#subty as __rt::FromValue>::try_from_value },
+                quote! { (__rt::arg_value_info!(#subty).parser) },
                 false,
             ),
             ArgTyKind::Convert => (
                 quote! { __rt::Option<#field_ty> },
-                quote! { <#field_ty as __rt::FromValue>::try_from_value },
+                quote! { (__rt::arg_value_info!(#field_ty).parser) },
                 true,
             ),
         };

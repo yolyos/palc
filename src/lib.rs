@@ -1,7 +1,5 @@
-use std::borrow::Cow;
 use std::convert::Infallible;
-use std::ffi::{OsStr, OsString};
-use std::path::PathBuf;
+use std::ffi::OsString;
 
 use crate::internal::{ArgsInternal, CommandInternal, try_parse_with_state};
 
@@ -11,6 +9,7 @@ use internal::ArgsIter;
 
 mod error;
 mod internal;
+mod values;
 
 pub use crate::error::Error;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -27,12 +26,17 @@ pub mod __private {
     pub use std::ffi::{OsStr, OsString};
     pub use {Default, Err, Iterator, None, Ok, Option, Some, char, str, usize};
 
+    // Used by `arg_value_info!`
+    pub use crate::arg_value_info;
+    pub use crate::values::InferValueParser;
+    pub use std::marker::PhantomData;
+
     use crate::ErrorKind;
     pub use crate::internal::{
         ArgsInternal, ArgsIter, CommandInternal, FeedNamed, FeedNamedOk, FeedUnnamed, ParserState,
         try_parse_with_state,
     };
-    pub use crate::{FromValue, Parser, Result, Subcommand};
+    pub use crate::{Parser, Result, Subcommand};
 
     pub fn unknown_subcommand<T>(arg: &str) -> Result<T> {
         Err(ErrorKind::UnknownSubcommand(arg.into()).into())
@@ -81,51 +85,5 @@ impl Subcommand for Infallible {}
 impl CommandInternal for Infallible {
     fn try_parse_with_name(name: &str, _args: &mut ArgsIter<'_>) -> Result<Self> {
         Err(ErrorKind::UnexpectedUnnamedArgument(name.into()).into())
-    }
-}
-
-pub trait FromValue: Sized + sealed::Sealed {
-    fn try_from_value(v: Cow<'_, OsStr>) -> Result<Self>;
-}
-
-mod sealed {
-    pub trait Sealed {}
-}
-
-impl sealed::Sealed for PathBuf {}
-impl FromValue for PathBuf {
-    fn try_from_value(v: Cow<'_, OsStr>) -> Result<Self> {
-        Ok(v.into_owned().into())
-    }
-}
-
-impl sealed::Sealed for String {}
-impl FromValue for String {
-    fn try_from_value(v: Cow<'_, OsStr>) -> Result<Self> {
-        v.into_owned()
-            .into_string()
-            .map_err(|s| ErrorKind::InvalidUtf8(s).into())
-    }
-}
-
-impl sealed::Sealed for f64 {}
-impl FromValue for f64 {
-    fn try_from_value(s: Cow<'_, OsStr>) -> Result<Self> {
-        let s = s
-            .to_str()
-            .ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?;
-        s.parse::<f64>()
-            .map_err(|err| ErrorKind::InvalidValue(s.into(), err.to_string()).into())
-    }
-}
-
-impl sealed::Sealed for usize {}
-impl FromValue for usize {
-    fn try_from_value(s: Cow<'_, OsStr>) -> Result<Self> {
-        let s = s
-            .to_str()
-            .ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?;
-        s.parse::<usize>()
-            .map_err(|err| ErrorKind::InvalidValue(s.into(), err.to_string()).into())
     }
 }
