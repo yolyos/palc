@@ -76,14 +76,13 @@ impl<T: FromStr<Err: fmt::Display>> InferValueParser<T, &()> {
     }
 }
 
+/// A placeholder struct to emit errors if a type is cannot be parsed.
+#[expect(non_camel_case_types, reason = "for error display")]
+pub struct Error__ThisTypeIsNotParseable<T>(PhantomData<T>);
+
 impl<T> InferValueParser<T, ()> {
-    pub fn get(&self) -> &'static ArgValueInfo<T> {
-        &const {
-            panic!(
-                "cannot parse this type from arguments, try `impl FromStr`, `impl From<OsString>` \
-                or `derive(ValueEnum)` for it"
-            )
-        }
+    pub fn get(&self) -> Error__ThisTypeIsNotParseable<T> {
+        Error__ThisTypeIsNotParseable(PhantomData)
     }
 }
 
@@ -96,6 +95,6 @@ fn native_impls() {
 }
 
 /// ```compile_fail
-/// let _f = clap_static::arg_value_info!(());
+/// let _f = clap_static::arg_value_info!(()).parser;
 /// ```
 fn _not_implemented() {}

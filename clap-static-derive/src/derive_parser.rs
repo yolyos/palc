@@ -1,8 +1,9 @@
 use darling::FromDeriveInput;
 use darling::util::Override;
 use proc_macro2::TokenStream;
-use quote::{ToTokens, format_ident, quote};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::punctuated::Punctuated;
+use syn::spanned::Spanned;
 use syn::{DeriveInput, Error, Generics, Ident, Token};
 
 use crate::common::{
@@ -123,12 +124,12 @@ pub fn expand_state_def_impl(
             }
             ArgTyKind::Option(subty) => (
                 quote! { #field_ty },
-                quote! { (__rt::arg_value_info!(#subty).parser) },
+                quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
                 false,
             ),
             ArgTyKind::Convert => (
                 quote! { __rt::Option<#field_ty> },
-                quote! { (__rt::arg_value_info!(#field_ty).parser) },
+                quote_spanned!(field_ty.span()=> (__rt::arg_value_info!(#field_ty).parser)),
                 true,
             ),
         };

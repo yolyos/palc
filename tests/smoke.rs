@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap_static::{Parser, Subcommand};
+use clap_static::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, PartialEq, Parser)]
 struct MyCli {
@@ -11,6 +11,9 @@ struct MyCli {
 
     #[arg(short = 'v')]
     debug: bool,
+
+    #[arg(long)]
+    color: Color,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -24,12 +27,29 @@ enum Commands {
     },
 }
 
+#[derive(Debug, PartialEq, ValueEnum)]
+enum Color {
+    Auto,
+    Never,
+    Always,
+}
+
 #[test]
 fn smoke() {
-    let args = MyCli::try_parse_from(["foo", "--config", "foo", "bar", "test", "-l"]).unwrap();
+    let args = MyCli::try_parse_from([
+        "foo",
+        "--color=always",
+        "--config",
+        "foo",
+        "bar",
+        "test",
+        "-l",
+    ])
+    .unwrap();
     assert_eq!(
         args,
         MyCli {
+            color: Color::Always,
             name: Some("bar".into()),
             config: "foo".into(),
             debug: false,

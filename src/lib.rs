@@ -3,7 +3,7 @@ use std::ffi::OsString;
 
 use crate::internal::{ArgsInternal, CommandInternal, try_parse_with_state};
 
-pub use clap_static_derive::{Parser, Subcommand};
+pub use clap_static_derive::{Parser, Subcommand, ValueEnum};
 use error::ErrorKind;
 use internal::ArgsIter;
 
@@ -28,7 +28,7 @@ pub mod __private {
 
     // Used by `arg_value_info!`
     pub use crate::arg_value_info;
-    pub use crate::values::InferValueParser;
+    pub use crate::values::{ArgValue, ArgValueInfo, InferValueParser};
     pub use std::marker::PhantomData;
 
     use crate::ErrorKind;
@@ -52,6 +52,15 @@ pub mod __private {
 
     pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
         Cow::Owned(std::mem::take(s))
+    }
+
+    pub fn str_from_utf8(s: &OsStr) -> Result<&str> {
+        Ok(s.to_str()
+            .ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?)
+    }
+
+    pub fn invalid_value<T>(s: &str) -> Result<T> {
+        Err(ErrorKind::InvalidValue(s.into(), "TODO: unknown variant".into()).into())
     }
 }
 
