@@ -24,6 +24,8 @@ enum Commands {
     Test {
         #[arg(short, long)]
         list: bool,
+
+        files: Vec<PathBuf>,
     },
 }
 
@@ -44,6 +46,8 @@ fn smoke() {
         "bar",
         "test",
         "-l",
+        "hello",
+        "world",
     ])
     .unwrap();
     assert_eq!(
@@ -53,7 +57,10 @@ fn smoke() {
             name: Some("bar".into()),
             config: "foo".into(),
             debug: false,
-            command: Some(Commands::Test { list: true }),
+            command: Some(Commands::Test {
+                list: true,
+                files: vec![PathBuf::from("hello"), PathBuf::from("world")],
+            }),
         }
     );
 }

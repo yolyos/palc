@@ -75,6 +75,7 @@ pub struct ParserStateDefImpl {
     fields: Vec<FieldInfo>,
     match_named_arms: TokenStream,
     handle_unnamed: TokenStream,
+    handle_last_unnamed: Option<TokenStream>,
     subcommand: Option<SubcommandInfo>,
 }
 
@@ -103,6 +104,7 @@ pub fn expand_state_def_impl(
         fields: Vec::with_capacity(input_fields.len()),
         match_named_arms: TokenStream::new(),
         handle_unnamed: TokenStream::new(),
+        handle_last_unnamed: None,
         subcommand: None,
     };
 
@@ -111,8 +113,8 @@ pub fn expand_state_def_impl(
         let field_name_str = field_name.to_string();
         let field_ty = &field.ty;
 
-        // This is unused for subcommands.
-        let (state_ty, parser, needs_unwrap) = match field.arg_ty_kind() {
+        let arg_kind = field.arg_ty_kind();
+        let (state_ty, parser, needs_unwrap) = match arg_kind {
             ArgTyKind::Bool => {
                 if let ArgOrCommand::None = &field.attrs {
                     return Err(syn::Error::new(
@@ -122,6 +124,11 @@ pub fn expand_state_def_impl(
                 }
                 (quote! { bool }, TokenStream::new(), false)
             }
+            ArgTyKind::Vec(subty) => (
+                quote! { #field_ty },
+                quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
+                false,
+            ),
             ArgTyKind::Option(subty) => (
                 quote! { #field_ty },
                 quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
@@ -139,13 +146,32 @@ pub fn expand_state_def_impl(
         match &field.attrs {
             // Unnamed (positional) arguments.
             ArgOrCommand::None => {
+                if out.handle_last_unnamed.is_some() {
+                    return Err(syn::Error::new(
+                        field_name.span(),
+                        "additional positional arguments are not allowed \
+                        after a catch-all argument",
+                    ));
+                }
+
                 display_name = heck::AsShoutySnakeCase(field_name_str).to_string();
-                out.handle_unnamed.extend(quote! {
-                    if self.#field_name.is_none() {
-                        self.#field_name = __rt::Some(#parser(__rt::take_arg(__arg))?);
-                        return __rt::Ok(());
+                match arg_kind {
+                    ArgTyKind::Bool => unreachable!(),
+                    ArgTyKind::Option(_) | ArgTyKind::Convert => {
+                        out.handle_unnamed.extend(quote! {
+                            if self.#field_name.is_none() {
+                                self.#field_name = __rt::Some(#parser(__rt::take_arg(__arg))?);
+                                return __rt::Ok(());
+                            }
+                        });
                     }
-                });
+                    ArgTyKind::Vec(_) => {
+                        out.handle_last_unnamed = Some(quote! {{
+                            self.#field_name.push(#parser(__rt::take_arg(__arg))?);
+                            __rt::Ok(())
+                        }});
+                    }
+                }
             }
             // Named arguments.
             ArgOrCommand::Arg(Arg { long, short }) => {
@@ -169,11 +195,17 @@ pub fn expand_state_def_impl(
                 }
                 assert!(!pats.is_empty(), "validated by darling");
 
-                let handler = match field.arg_ty_kind() {
+                let handler = match arg_kind {
                     ArgTyKind::Bool => quote! {{
                         self.#field_name = true;
                         __rt::Ok(__rt::FeedNamedOk::Arg0)
                     }},
+                    ArgTyKind::Vec(_) => quote! {
+                        __rt::Ok(__rt::FeedNamedOk::Arg1(|__s, __v| {
+                            __s.#field_name.push(#parser(__v)?);
+                            __rt::Ok(())
+                        }))
+                    },
                     ArgTyKind::Option(_) | ArgTyKind::Convert => quote! {
                         __rt::Ok(__rt::FeedNamedOk::Arg1(|__s, __v| {
                             __s.#field_name = Some(#parser(__v)?);
@@ -230,6 +262,7 @@ impl ToTokens for ParserStateDefImpl {
             fields,
             match_named_arms,
             handle_unnamed,
+            handle_last_unnamed,
             subcommand,
         } = self;
         let output_ctor = output_ctor.as_ref().unwrap_or(&self.output_ty);
@@ -258,6 +291,10 @@ impl ToTokens for ParserStateDefImpl {
             } else {
                 quote! { self.#name }
             }
+        });
+
+        let handle_last_unnamed = handle_last_unnamed.clone().unwrap_or_else(|| {
+            quote! { __rt::Err(__rt::None) }
         });
 
         let (subcommand_ty, subcommand_finish) = match subcommand {
@@ -300,7 +337,7 @@ impl ToTokens for ParserStateDefImpl {
 
                 fn feed_unnamed(&mut self, __arg: &mut __rt::OsString) -> __rt::FeedUnnamed {
                     #handle_unnamed
-                    __rt::Err(__rt::None)
+                    #handle_last_unnamed
                 }
 
                 fn finish(self, __subcmd: __rt::Option<Self::Subcommand>) -> __rt::Result<Self::Output> {

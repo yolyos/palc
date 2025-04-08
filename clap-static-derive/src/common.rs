@@ -7,18 +7,25 @@ use syn::{Attribute, GenericArgument, Ident, PathArguments, Type};
 
 pub const TY_BOOL: &str = "bool";
 pub const TY_OPTION: &str = "Option";
+pub const TY_VEC: &str = "Vec";
 
 /// `TyCtor<ArgTy>` => `ArgTy`. `ty_ctor` must be a single-identifier path.
-pub fn strip_ty_ctor<'i>(ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
-    if let Type::Path(ty) = ty {
-        if ty.path.leading_colon.is_none() && ty.path.segments.len() == 1 {
-            let seg = &ty.path.segments[0];
-            if seg.ident == ty_ctor {
-                if let PathArguments::AngleBracketed(args) = &seg.arguments {
-                    if args.args.len() == 1 {
-                        if let GenericArgument::Type(arg_ty) = &args.args[0] {
-                            return Some(arg_ty);
-                        }
+pub fn strip_ty_ctor<'i>(mut ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
+    let ty = loop {
+        match ty {
+            Type::Group(inner) => ty = &inner.elem,
+            Type::Paren(inner) => ty = &inner.elem,
+            Type::Path(inner) => break inner,
+            _ => return None,
+        }
+    };
+    if ty.path.leading_colon.is_none() && ty.path.segments.len() == 1 {
+        let seg = &ty.path.segments[0];
+        if seg.ident == ty_ctor {
+            if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                if args.args.len() == 1 {
+                    if let GenericArgument::Type(arg_ty) = &args.args[0] {
+                        return Some(arg_ty);
                     }
                 }
             }
@@ -56,6 +63,7 @@ pub enum ArgTyKind<'a> {
     Bool,
     Option(&'a Type),
     Convert,
+    Vec(&'a Type),
 }
 
 impl ArgField {
@@ -66,6 +74,9 @@ impl ArgField {
         }
         if let Some(arg_ty) = strip_ty_ctor(ty, TY_OPTION) {
             return ArgTyKind::Option(arg_ty);
+        }
+        if let Some(arg_ty) = strip_ty_ctor(ty, TY_VEC) {
+            return ArgTyKind::Vec(arg_ty);
         }
         ArgTyKind::Convert
     }
