@@ -11,16 +11,22 @@ use super::Error;
 
 /// A named argument with its place attached as `&mut self`.
 pub trait ArgPlace {
-    fn need_value(&self) -> bool;
+    fn num_values(&self) -> NumValues;
 
     fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error>;
+}
+
+/// The expected number of values for a named argument to take.
+pub enum NumValues {
+    Zero,
+    One { require_equals: bool },
 }
 
 pub fn place_for_flag<'a>() -> &'a mut dyn ArgPlace {
     struct FlagPlace;
     impl ArgPlace for FlagPlace {
-        fn need_value(&self) -> bool {
-            false
+        fn num_values(&self) -> NumValues {
+            NumValues::Zero
         }
         fn feed(&mut self, _: Cow<'_, OsStr>) -> Result<(), Error> {
             unreachable!()
@@ -32,19 +38,24 @@ pub fn place_for_flag<'a>() -> &'a mut dyn ArgPlace {
     Box::leak(Box::new(FlagPlace))
 }
 
-pub fn place_for_vec<T, F>(place: &mut Vec<T>, _f: F) -> &'_ mut dyn ArgPlace
+pub fn place_for_vec<T, F, const REQUIRE_EQ: bool>(
+    place: &mut Vec<T>,
+    _f: F,
+) -> &'_ mut dyn ArgPlace
 where
     F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
 {
     #[repr(C)]
-    struct Place<T, F>(Vec<T>, F);
+    struct Place<T, F, const REQUIRE_EQ: bool>(Vec<T>, F);
 
-    impl<T, F> ArgPlace for Place<T, F>
+    impl<T, F, const REQUIRE_EQ: bool> ArgPlace for Place<T, F, REQUIRE_EQ>
     where
         F: Fn(Cow<'_, OsStr>) -> Result<T>,
     {
-        fn need_value(&self) -> bool {
-            true
+        fn num_values(&self) -> NumValues {
+            NumValues::One {
+                require_equals: REQUIRE_EQ,
+            }
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
@@ -55,22 +66,27 @@ where
 
     assert_eq!(size_of::<F>(), 0);
     assert_eq!(align_of::<F>(), 1);
-    unsafe { &mut *(place as *mut Vec<T> as *mut Place<T, F>) }
+    unsafe { &mut *(place as *mut Vec<T> as *mut Place<T, F, REQUIRE_EQ>) }
 }
 
-pub fn place_for_set_value<T, F>(place: &mut Option<T>, _f: F) -> &'_ mut dyn ArgPlace
+pub fn place_for_set_value<T, F, const REQUIRE_EQ: bool>(
+    place: &mut Option<T>,
+    _f: F,
+) -> &'_ mut dyn ArgPlace
 where
     F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
 {
     #[repr(C)]
-    struct Place<T, F>(Option<T>, F);
+    struct Place<T, F, const REQUIRE_EQ: bool>(Option<T>, F);
 
-    impl<T, F> ArgPlace for Place<T, F>
+    impl<T, F, const REQUIRE_EQ: bool> ArgPlace for Place<T, F, REQUIRE_EQ>
     where
         F: Fn(Cow<'_, OsStr>) -> Result<T>,
     {
-        fn need_value(&self) -> bool {
-            true
+        fn num_values(&self) -> NumValues {
+            NumValues::One {
+                require_equals: REQUIRE_EQ,
+            }
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
@@ -81,7 +97,7 @@ where
 
     assert_eq!(size_of::<F>(), 0);
     assert_eq!(align_of::<F>(), 1);
-    unsafe { &mut *(place as *mut Option<T> as *mut Place<T, F>) }
+    unsafe { &mut *(place as *mut Option<T> as *mut Place<T, F, REQUIRE_EQ>) }
 }
 
 /// A greedy unnamed argument with its place attached as `&mut self`.
@@ -158,14 +174,19 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
         match arg {
             Arg::DashDash => todo!(),
             Arg::Named(name) => match state.feed_named(name) {
-                Some(place) => {
-                    if place.need_value() {
-                        let val = args.take_value()?;
-                        place.feed(val)?;
-                    } else {
-                        args.check_no_value()?;
+                Some(place) => match place.num_values() {
+                    NumValues::Zero => args.check_no_value()?,
+                    NumValues::One {
+                        require_equals: false,
+                    } => {
+                        place.feed(args.take_value()?)?;
                     }
-                }
+                    NumValues::One {
+                        require_equals: true,
+                    } => {
+                        place.feed(Cow::Borrowed(args.take_value_after_eq()?))?;
+                    }
+                },
                 None => return Err(ErrorKind::UnknownNamedArgument.with_arg(name)),
             },
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg) {
@@ -218,7 +239,23 @@ impl<'a> ArgsIter<'a> {
         }
     }
 
-    /// Retrieve the value for the current named argument, either after `=` or fetch from the next
+    /// Retrieve the value for the current named argument after a mandatory "=".
+    fn take_value_after_eq(&mut self) -> Result<&'_ OsStr> {
+        match self.state {
+            ArgsState::Long { eq_pos: Some(pos) } => Ok(self.cur_input_arg.index(pos.get() + 1..)),
+            ArgsState::Short { next_pos }
+                if self.cur_input_arg.as_encoded_bytes().get(next_pos) == Some(&b'=') =>
+            {
+                // Don't traverse the rest.
+                self.state = ArgsState::Unnamed;
+                Ok(self.cur_input_arg.index(next_pos + 1..))
+            }
+            // FIXME: Report error argument name.
+            _ => Err(ErrorKind::MissingEq.into()),
+        }
+    }
+
+    /// Retrieve the value for the current named argument, either after "=" or fetch from the next
     /// input argument.
     fn take_value(&mut self) -> Result<Cow<'_, OsStr>> {
         match self.state {
@@ -226,7 +263,12 @@ impl<'a> ArgsIter<'a> {
                 Ok(Cow::Borrowed(self.cur_input_arg.index(pos.get() + 1..)))
             }
             ArgsState::Short { next_pos } => {
-                Ok(Cow::Borrowed(self.cur_input_arg.index(next_pos..)))
+                let pos = if self.cur_input_arg.as_encoded_bytes().get(next_pos) == Some(&b'=') {
+                    next_pos + 1
+                } else {
+                    next_pos
+                };
+                Ok(Cow::Borrowed(self.cur_input_arg.index(pos..)))
             }
             ArgsState::Long { eq_pos: None } => {
                 let Some(arg) = self.iter.next() else {

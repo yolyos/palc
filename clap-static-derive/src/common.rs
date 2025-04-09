@@ -128,7 +128,7 @@ pub enum ArgOrCommand {
 
 #[derive(FromMeta, Default)]
 #[cfg_attr(feature = "__test-allow-unknown-fields", darling(allow_unknown_fields))]
-#[darling(default)]
+#[darling(default, and_then = ArgMeta::validate)]
 pub struct ArgMeta {
     // Names.
     pub long: Option<Override<String>>,
@@ -139,7 +139,8 @@ pub struct ArgMeta {
     // TODO: {,visible_}{,short_}alias{,es}, value_names
 
     // Argument behaviors.
-    // TODO: require_equals, global, trailing_var_args, last, raw
+    pub require_equals: bool,
+    // TODO: global, trailing_var_args, last, raw
 
     // Value behaviors.
     // TODO: num_args, value_delimiter, default_value,
@@ -169,6 +170,15 @@ pub struct ArgMeta {
 impl ArgMeta {
     pub fn is_named(&self) -> bool {
         self.long.is_some() || self.short.is_some()
+    }
+
+    fn validate(self) -> Result<Self> {
+        if !self.is_named() && self.require_equals {
+            return Err(Error::custom(
+                "arg(require_equals) is only useful for named arguments",
+            ));
+        }
+        Ok(self)
     }
 }
 

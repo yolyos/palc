@@ -22,6 +22,7 @@ pub(crate) enum ErrorKind {
     MissingValue,
     InvalidValue(OsString, String),
     MissingArg0,
+    MissingEq,
 
     Custom(String),
 }
@@ -85,6 +86,10 @@ impl fmt::Display for Error {
             }
             ErrorKind::MissingArg0 => {
                 write!(f, "missing executable argument (argv[0])")
+            }
+            ErrorKind::MissingEq => {
+                maybe_arg.0 = " ";
+                write!(f, "missing required '=' for argument{maybe_arg}")
             }
 
             ErrorKind::Custom(reason) => {

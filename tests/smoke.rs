@@ -12,7 +12,7 @@ struct MyCli {
     #[arg(short = 'v')]
     debug: bool,
 
-    #[arg(long)]
+    #[arg(long, require_equals = true)]
     color: Color,
 
     #[command(subcommand)]

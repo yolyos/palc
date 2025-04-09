@@ -166,6 +166,12 @@ pub fn expand_state_def_impl(
                                 "positional arguments cannot be `bool`",
                             ));
                         }
+                        if arg.require_equals {
+                            return Err(syn::Error::new(
+                                field_name.span(),
+                                "arg(require_equals) cannot be used for `bool` which takes no values",
+                            ));
+                        }
                         (
                             quote! { bool },
                             quote! { bool },
@@ -255,6 +261,7 @@ pub fn expand_state_def_impl(
                         pats.push(short.to_string());
                     }
                     assert!(!pats.is_empty());
+                    let require_eq = arg.require_equals;
 
                     let handler = match arg_kind {
                         ArgTyKind::Bool => quote! {{
@@ -262,13 +269,13 @@ pub fn expand_state_def_impl(
                             __rt::place_for_flag()
                         }},
                         ArgTyKind::Vec(_) => quote! {
-                            __rt::place_for_vec(&mut self.#field_name, #parser)
+                            __rt::place_for_vec::<_, _, #require_eq>(&mut self.#field_name, #parser)
                         },
                         ArgTyKind::OptionVec(_) => quote! {
-                            __rt::place_for_vec(self.#field_name.get_or_insert_default(), #parser)
+                            __rt::place_for_vec::<_, _, #require_eq>(self.#field_name.get_or_insert_default(), #parser)
                         },
                         ArgTyKind::Option(_) | ArgTyKind::Convert => quote! {
-                            __rt::place_for_set_value(&mut self.#field_name, #parser)
+                            __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#field_name, #parser)
                         },
                     };
 
