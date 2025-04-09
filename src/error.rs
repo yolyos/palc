@@ -21,6 +21,7 @@ pub(crate) enum ErrorKind {
     UnexpectedValue(OsString),
     MissingValue,
     InvalidValue(OsString, String),
+    MissingArg0,
 
     Custom(String),
 }
@@ -81,6 +82,9 @@ impl fmt::Display for Error {
             }
             ErrorKind::InvalidValue(value, err) => {
                 write!(f, "invalid value {value:?}{maybe_arg}: {err}")
+            }
+            ErrorKind::MissingArg0 => {
+                write!(f, "missing executable argument (argv[0])")
             }
 
             ErrorKind::Custom(reason) => {

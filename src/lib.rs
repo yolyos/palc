@@ -1,11 +1,12 @@
 use std::convert::Infallible;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use crate::internal::{ArgsInternal, CommandInternal};
 
 pub use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 use error::ErrorKind;
-use internal::{ArgsIter, try_parse_args};
+use internal::ArgsIter;
 
 mod error;
 mod internal;
@@ -81,7 +82,7 @@ pub mod __private {
 }
 
 /// Top-level command interface.
-pub trait Parser: Sized + 'static + Args {
+pub trait Parser: Sized + 'static + CommandInternal {
     fn parse() -> Self {
         match Self::try_parse_from(std::env::args_os()) {
             Ok(v) => v,
@@ -97,10 +98,19 @@ pub trait Parser: Sized + 'static + Args {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
-        let mut iter = iter.into_iter().skip(1).map(|s| s.into());
-        let mut args = ArgsIter::new(&mut iter);
-        try_parse_args::<Self>(&mut args)
+        let mut iter = iter.into_iter().map(|s| s.into());
+        try_parse_from_command(&mut iter)
     }
+}
+
+fn try_parse_from_command<C: CommandInternal>(
+    iter: &mut dyn Iterator<Item = OsString>,
+) -> Result<C> {
+    let arg0 = PathBuf::from(iter.next().ok_or(ErrorKind::MissingArg0)?);
+    // A non-UTF8 program name does not matter in help. Multi-call commands will fail anyway.
+    let program_name = arg0.file_name().unwrap_or(arg0.as_ref()).to_string_lossy();
+    let mut args = ArgsIter::new(iter);
+    CommandInternal::try_parse_with_name(&program_name, &mut args)
 }
 
 /// A group of arguments for composing larger inferface.

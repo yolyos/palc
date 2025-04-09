@@ -140,6 +140,13 @@ pub trait CommandInternal: Sized {
     fn try_parse_with_name(name: &str, args: &mut ArgsIter<'_>) -> Result<Self>;
 }
 
+/// A common program-name-agnostic command.
+impl<A: Args> CommandInternal for A {
+    fn try_parse_with_name(_name: &str, args: &mut ArgsIter<'_>) -> Result<Self> {
+        try_parse_args(args)
+    }
+}
+
 pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>) -> Result<A> {
     let mut state = A::__State::init();
     try_parse_with_state(&mut state, args)?;
