@@ -1,9 +1,11 @@
+use std::ops;
+
 use darling::util::Override;
 use darling::{Error, FromField, FromMeta, FromVariant, Result};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use syn::spanned::Spanned;
-use syn::{Attribute, GenericArgument, Ident, PathArguments, Type};
+use syn::{Attribute, Expr, GenericArgument, Ident, PathArguments, Type};
 
 pub const TY_BOOL: &str = "bool";
 pub const TY_OPTION: &str = "Option";
@@ -115,36 +117,59 @@ fn parse_arg_or_command(attrs: Vec<Attribute>) -> Result<ArgOrCommand> {
         return Ok(ArgOrCommand::Flatten);
     }
 
-    Ok(ArgOrCommand::Arg(match arg {
-        Some(arg) if arg.long.is_some() || arg.short.is_some() => Arg::Named(NamedArg {
-            long: arg.long,
-            short: arg.short,
-        }),
-        _ => Arg::Unnamed,
-    }))
+    Ok(ArgOrCommand::Arg(arg.unwrap_or_default()))
 }
 
 pub enum ArgOrCommand {
-    Arg(Arg),
+    Arg(ArgMeta),
     Subcommand,
     Flatten,
 }
 
-pub enum Arg {
-    Named(NamedArg),
-    Unnamed,
-}
-
-pub struct NamedArg {
+#[derive(FromMeta, Default)]
+#[cfg_attr(feature = "__test-allow-unknown-fields", darling(allow_unknown_fields))]
+#[darling(default)]
+pub struct ArgMeta {
+    // Names.
     pub long: Option<Override<String>>,
     pub short: Option<Override<char>>,
+    pub alias: OneOrArray<String>,
+    pub short_alias: OneOrArray<char>,
+    pub value_name: Option<String>,
+    // TODO: {,visible_}{,short_}alias{,es}, value_names
+
+    // Argument behaviors.
+    // TODO: require_equals, global, trailing_var_args, last, raw
+
+    // Value behaviors.
+    // TODO: num_args, value_delimiter, default_value,
+    // index, action, value_terminator, default_missing_value*, env
+    // Not needed: required
+
+    // Help & completion.
+    pub help: Option<String>,
+    pub long_help: Option<String>,
+    pub display_order: Option<usize>,
+    pub help_heading: Option<String>,
+    pub next_line_help: bool,
+    pub hide: bool,
+    pub hide_possible_values: bool,
+    pub hide_default_value: bool,
+    pub hide_env: bool,
+    pub hide_env_values: bool,
+    pub hide_short_help: bool,
+    pub hide_long_help: bool,
+    // TODO: add
+
+    // Validation.
+    // TODO: exclusive, requires, default_value_if{,s}, required_unless_present*, required_if*,
+    // conflicts_with*, overrides_with*
 }
 
-#[derive(FromMeta)]
-#[cfg_attr(feature = "__test-allow-unknown-fields", darling(allow_unknown_fields))]
-struct ArgMeta {
-    long: Option<Override<String>>,
-    short: Option<Override<char>>,
+impl ArgMeta {
+    pub fn is_named(&self) -> bool {
+        self.long.is_some() || self.short.is_some()
+    }
 }
 
 #[derive(FromMeta)]
@@ -167,5 +192,38 @@ impl CommandMeta {
             ));
         }
         Ok(self)
+    }
+}
+
+#[derive(Default)]
+pub struct OneOrArray<T>(pub Vec<T>);
+
+impl<T> ops::Deref for OneOrArray<T> {
+    type Target = [T];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: FromMeta> FromMeta for OneOrArray<T> {
+    fn from_value(value: &syn::Lit) -> Result<Self> {
+        T::from_value(value).map(|elem| Self(vec![elem]))
+    }
+
+    fn from_expr(expr: &Expr) -> Result<Self> {
+        match *expr {
+            Expr::Array(ref arr) => {
+                let mut errs = darling::Error::accumulator();
+                let mut ret = Vec::with_capacity(arr.elems.len());
+                for elem in arr.elems.iter() {
+                    ret.extend(errs.handle(T::from_expr(elem)));
+                }
+                errs.finish_with(Self(ret))
+            }
+            Expr::Lit(ref lit) => Self::from_value(&lit.lit),
+            Expr::Group(ref group) => Self::from_expr(&group.expr),
+            _ => Err(Error::unexpected_expr_type(expr)),
+        }
+        .map_err(|e| e.with_span(expr))
     }
 }

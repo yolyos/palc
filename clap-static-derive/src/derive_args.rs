@@ -6,9 +6,7 @@ use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::{DeriveInput, Generics, Ident, Token, Visibility};
 
-use crate::common::{
-    Arg, ArgField, ArgOrCommand, ArgTyKind, NamedArg, TY_OPTION, strip_ty_ctor, wrap_anon_item,
-};
+use crate::common::{ArgField, ArgOrCommand, ArgTyKind, TY_OPTION, strip_ty_ctor, wrap_anon_item};
 
 #[derive(FromDeriveInput)]
 #[darling(supports(struct_named))]
@@ -162,7 +160,7 @@ pub fn expand_state_def_impl(
                 let arg_kind = field.arg_ty_kind();
                 let (value_ty, state_ty, default, finish) = match arg_kind {
                     ArgTyKind::Bool => {
-                        if matches!(arg, Arg::Unnamed) {
+                        if !arg.is_named() {
                             return Err(syn::Error::new(
                                 field_name.span(),
                                 "positional arguments cannot be `bool`",
@@ -198,76 +196,83 @@ pub fn expand_state_def_impl(
                     quote_spanned!(value_ty.span()=> (__rt::arg_value_info!(#value_ty).parser));
 
                 let mut display_name = String::new();
-                match arg {
-                    Arg::Unnamed => {
-                        display_name = heck::AsShoutySnakeCase(field_name_str).to_string();
-                        match arg_kind {
-                            ArgTyKind::Bool => unreachable!(),
-                            ArgTyKind::Option(_) | ArgTyKind::Convert => {
-                                out.handle_unnamed.extend(quote! {
-                                    if self.#field_name.is_none() {
-                                        self.#field_name = __rt::Some(#parser(__rt::take_arg(__arg))?);
-                                        return __rt::Ok(__rt::None);
-                                    }
-                                });
-                            }
-                            ArgTyKind::Vec(_) => {
-                                check_variable_arg(field_name.span())?;
-                                out.handle_last_unnamed = Some(quote! {{
-                                    self.#field_name.push(#parser(__rt::take_arg(__arg))?);
-                                    __rt::Ok(__rt::None)
-                                }});
-                            }
-                            ArgTyKind::OptionVec(_) => {
-                                check_variable_arg(field_name.span())?;
-                                out.handle_last_unnamed = Some(quote! {{
-                                    self.#field_name.get_or_insert_default().push(#parser(__rt::take_arg(__arg))?);
-                                    __rt::Ok(__rt::None)
-                                }});
-                            }
-                        }
-                    }
-                    Arg::Named(NamedArg { long, short }) => {
-                        let mut pats = <Punctuated<String, Token![|]>>::new();
+                if !arg.is_named() {
+                    display_name = arg
+                        .value_name
+                        .clone()
+                        .unwrap_or_else(|| heck::AsShoutySnakeCase(field_name_str).to_string());
 
-                        if let Some(ch) = short {
-                            let ch = ch.clone().unwrap_or_else(|| {
-                                field_name_str.chars().next().expect("must have name")
-                            });
-                            display_name = format!("-{ch}");
-                            pats.push(ch.to_string());
-                        }
-                        if let Some(name) = long {
-                            let long_name = match name {
-                                Override::Inherit => {
-                                    format!("--{}", heck::AsKebabCase(&field_name_str))
+                    match arg_kind {
+                        ArgTyKind::Bool => unreachable!(),
+                        ArgTyKind::Option(_) | ArgTyKind::Convert => {
+                            out.handle_unnamed.extend(quote! {
+                                if self.#field_name.is_none() {
+                                    self.#field_name = __rt::Some(#parser(__rt::take_arg(__arg))?);
+                                    return __rt::Ok(__rt::None);
                                 }
-                                Override::Explicit(s) => format!("--{s}"),
-                            };
-                            // Prefer long names for display.
-                            display_name = long_name.clone();
-                            pats.push(long_name);
+                            });
                         }
-                        assert!(!pats.is_empty(), "validated by darling");
-
-                        let handler = match arg_kind {
-                            ArgTyKind::Bool => quote! {{
-                                self.#field_name = true;
-                                __rt::place_for_flag()
-                            }},
-                            ArgTyKind::Vec(_) => quote! {
-                                __rt::place_for_vec(&mut self.#field_name, #parser)
-                            },
-                            ArgTyKind::OptionVec(_) => quote! {
-                                __rt::place_for_vec(self.#field_name.get_or_insert_default(), #parser)
-                            },
-                            ArgTyKind::Option(_) | ArgTyKind::Convert => quote! {
-                                __rt::place_for_set_value(&mut self.#field_name, #parser)
-                            },
-                        };
-
-                        out.match_named_arms.extend(quote! { #pats => #handler, });
+                        ArgTyKind::Vec(_) => {
+                            check_variable_arg(field_name.span())?;
+                            out.handle_last_unnamed = Some(quote! {{
+                                self.#field_name.push(#parser(__rt::take_arg(__arg))?);
+                                __rt::Ok(__rt::None)
+                            }});
+                        }
+                        ArgTyKind::OptionVec(_) => {
+                            check_variable_arg(field_name.span())?;
+                            out.handle_last_unnamed = Some(quote! {{
+                                self.#field_name.get_or_insert_default().push(#parser(__rt::take_arg(__arg))?);
+                                __rt::Ok(__rt::None)
+                            }});
+                        }
                     }
+                } else {
+                    let mut pats = <Punctuated<String, Token![|]>>::new();
+
+                    if let Some(ch) = &arg.short {
+                        let ch = ch.clone().unwrap_or_else(|| {
+                            field_name_str.chars().next().expect("must have name")
+                        });
+                        display_name = format!("-{ch}");
+                        pats.push(ch.to_string());
+                    }
+                    if let Some(name) = &arg.long {
+                        let long_name = match name {
+                            Override::Inherit => {
+                                format!("--{}", heck::AsKebabCase(&field_name_str))
+                            }
+                            Override::Explicit(s) => format!("--{s}"),
+                        };
+                        // Prefer long names for display.
+                        display_name = long_name.clone();
+                        pats.push(long_name);
+                    }
+                    for long in arg.alias.iter() {
+                        pats.push(format!("--{long}"));
+                    }
+                    for &short in arg.short_alias.iter() {
+                        pats.push(short.to_string());
+                    }
+                    assert!(!pats.is_empty());
+
+                    let handler = match arg_kind {
+                        ArgTyKind::Bool => quote! {{
+                            self.#field_name = true;
+                            __rt::place_for_flag()
+                        }},
+                        ArgTyKind::Vec(_) => quote! {
+                            __rt::place_for_vec(&mut self.#field_name, #parser)
+                        },
+                        ArgTyKind::OptionVec(_) => quote! {
+                            __rt::place_for_vec(self.#field_name.get_or_insert_default(), #parser)
+                        },
+                        ArgTyKind::Option(_) | ArgTyKind::Convert => quote! {
+                            __rt::place_for_set_value(&mut self.#field_name, #parser)
+                        },
+                    };
+
+                    out.match_named_arms.extend(quote! { #pats => #handler, });
                 }
 
                 out.fields.push(FieldInfo {
