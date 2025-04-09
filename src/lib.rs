@@ -24,6 +24,7 @@ pub mod __private {
     pub use std::borrow::Cow;
     pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
+    pub use std::unimplemented;
     pub use {Default, Err, Iterator, None, Ok, Option, Some, Vec, char, str, usize};
 
     // Used by `arg_value_info!`
@@ -37,6 +38,20 @@ pub mod __private {
         place_for_flag, place_for_set_value, place_for_vec, try_parse_with_state,
     };
     pub use crate::{Args, Parser, Result, Subcommand};
+
+    /// The fallback state type for graceful failing from proc-macro.
+    pub struct FallbackState<T>(Infallible, PhantomData<T>);
+
+    impl<T: 'static> ParserState for FallbackState<T> {
+        type Output = T;
+        type Subcommand = Infallible;
+        fn init() -> Self {
+            unimplemented!()
+        }
+        fn finish(self, _subcmd: Option<Self::Subcommand>) -> Result<Self::Output> {
+            match self {}
+        }
+    }
 
     pub fn unknown_subcommand<T>(arg: &str) -> Result<T> {
         Err(ErrorKind::UnknownSubcommand(arg.into()).into())

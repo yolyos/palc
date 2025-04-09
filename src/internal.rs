@@ -100,8 +100,13 @@ pub trait ParserState: Sized + 'static {
     fn init() -> Self;
     fn finish(self, subcmd: Option<Self::Subcommand>) -> Result<Self::Output>;
 
-    fn feed_named(&mut self, name: &str) -> FeedNamed<'_>;
-    fn feed_unnamed(&mut self, arg: &mut OsString) -> FeedUnnamed;
+    fn feed_named(&mut self, _name: &str) -> FeedNamed<'_> {
+        None
+    }
+
+    fn feed_unnamed(&mut self, _arg: &mut OsString) -> FeedUnnamed {
+        Err(None)
+    }
 }
 
 pub trait CommandInternal: Sized {

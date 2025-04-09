@@ -6,13 +6,19 @@ use syn::{DeriveInput, Ident};
 use crate::common::wrap_anon_item;
 
 pub(crate) fn expand(input: DeriveInput) -> TokenStream {
-    match ValueEnumDef::from_derive_input(&input) {
+    let mut tts = match ValueEnumDef::from_derive_input(&input) {
         Ok(def) => match expand_impl(def) {
-            Ok(tts) => wrap_anon_item(tts),
+            Ok(tts) => return wrap_anon_item(tts),
             Err(err) => err.to_compile_error(),
         },
         Err(err) => err.write_errors(),
-    }
+    };
+
+    tts.extend(wrap_anon_item(ValueEnumImpl {
+        ident: input.ident,
+        variants: Vec::new(),
+    }));
+    tts
 }
 
 #[derive(FromDeriveInput)]

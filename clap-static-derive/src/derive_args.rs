@@ -20,13 +20,29 @@ pub struct ArgsItemDef {
 }
 
 pub fn expand(input: DeriveInput, is_parser: bool) -> TokenStream {
-    match ArgsItemDef::from_derive_input(&input) {
+    let mut tts = match ArgsItemDef::from_derive_input(&input) {
         Err(err) => err.write_errors(),
         Ok(def) => match expand_args_impl(def, is_parser) {
-            Ok(tts) => wrap_anon_item(tts),
+            Ok(tts) => return wrap_anon_item(tts),
             Err(err) => err.into_compile_error(),
         },
-    }
+    };
+
+    // Error fallback impl.
+    let name = &input.ident;
+    tts.extend(wrap_anon_item(quote! {
+        #[automatically_derived]
+        impl __rt::Parser for #name {}
+
+        #[automatically_derived]
+        impl __rt::Args for #name {}
+
+        #[automatically_derived]
+        impl __rt::ArgsInternal for #name {
+            type __State = __rt::FallbackState<#name>;
+        }
+    }));
+    tts
 }
 
 /// For `derive({Args,Parser})`.

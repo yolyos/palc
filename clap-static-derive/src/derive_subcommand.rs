@@ -16,13 +16,27 @@ struct SubcommandDef {
 }
 
 pub(crate) fn expand(input: DeriveInput) -> TokenStream {
-    match SubcommandDef::from_derive_input(&input) {
+    let mut tts = match SubcommandDef::from_derive_input(&input) {
         Err(err) => err.write_errors(),
         Ok(def) => match expand_impl(def) {
-            Ok(tts) => wrap_anon_item(tts),
+            Ok(tts) => return wrap_anon_item(tts),
             Err(err) => err.into_compile_error(),
         },
-    }
+    };
+
+    let name = &input.ident;
+    tts.extend(wrap_anon_item(quote! {
+        impl __rt::Subcommand for #name {}
+        impl __rt::CommandInternal for #name {
+            fn try_parse_with_name(
+                __name: &__rt::str,
+                __args: &mut __rt::ArgsIter<'_>,
+            ) -> __rt::Result<Self> {
+                __rt::unimplemented!()
+            }
+        }
+    }));
+    tts
 }
 
 struct SubcommandImpl {
