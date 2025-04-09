@@ -9,14 +9,82 @@ use crate::error::ErrorKind;
 
 use super::Error;
 
-/// This is actually `enum { Ok(_), Unknown, Err(Error) }`,
-/// but use `Result` for `?` support.
-/// WAIT: <https://github.com/rust-lang/rust/issues/84277>
-pub type FeedNamed<S> = Result<FeedNamedOk<S>, Option<Error>>;
-pub enum FeedNamedOk<S> {
-    Arg0,
-    Arg1(fn(&mut S, Cow<'_, OsStr>) -> Result<()>),
+/// An argument place with its place attached as `self`.
+pub trait ArgPlace {
+    fn need_value(&self) -> bool;
+
+    fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error>;
 }
+
+pub fn place_for_flag<'a>() -> &'a mut dyn ArgPlace {
+    struct FlagPlace;
+    impl ArgPlace for FlagPlace {
+        fn need_value(&self) -> bool {
+            false
+        }
+        fn feed(&mut self, _: Cow<'_, OsStr>) -> Result<(), Error> {
+            unreachable!()
+        }
+    }
+
+    // This does no allocation but only initialize it as a dangling reference.
+    // From: <https://github.com/rust-lang/rust/issues/103821#issuecomment-1304004618>
+    Box::leak(Box::new(FlagPlace))
+}
+
+pub fn place_for_vec<T, F>(place: &mut Vec<T>, _f: F) -> &'_ mut dyn ArgPlace
+where
+    F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
+{
+    #[repr(C)]
+    struct Place<T, F>(Vec<T>, F);
+
+    impl<T, F> ArgPlace for Place<T, F>
+    where
+        F: Fn(Cow<'_, OsStr>) -> Result<T>,
+    {
+        fn need_value(&self) -> bool {
+            true
+        }
+
+        fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
+            self.0.push((self.1)(value)?);
+            Ok(())
+        }
+    }
+
+    assert_eq!(size_of::<F>(), 0);
+    assert_eq!(align_of::<F>(), 1);
+    unsafe { &mut *(place as *mut Vec<T> as *mut Place<T, F>) }
+}
+
+pub fn place_for_set_value<T, F>(place: &mut Option<T>, _f: F) -> &'_ mut dyn ArgPlace
+where
+    F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
+{
+    #[repr(C)]
+    struct Place<T, F>(Option<T>, F);
+
+    impl<T, F> ArgPlace for Place<T, F>
+    where
+        F: Fn(Cow<'_, OsStr>) -> Result<T>,
+    {
+        fn need_value(&self) -> bool {
+            true
+        }
+
+        fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
+            self.0 = Some((self.1)(value)?);
+            Ok(())
+        }
+    }
+
+    assert_eq!(size_of::<F>(), 0);
+    assert_eq!(align_of::<F>(), 1);
+    unsafe { &mut *(place as *mut Option<T> as *mut Place<T, F>) }
+}
+
+pub type FeedNamed<'s> = Option<&'s mut dyn ArgPlace>;
 
 /// This is actually `enum { Ok, Unknown, Err(Error) }`. Same as above.
 pub type FeedUnnamed = Result<(), Option<Error>>;
@@ -29,7 +97,7 @@ pub trait ParserState: Sized + Default + 'static {
     type Output;
     type Subcommand: crate::Subcommand;
 
-    fn feed_named(&mut self, name: &str) -> FeedNamed<Self>;
+    fn feed_named(&mut self, name: &str) -> FeedNamed<'_>;
 
     fn feed_unnamed(&mut self, arg: &mut OsString) -> FeedUnnamed;
 
@@ -46,13 +114,15 @@ pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S
         match arg {
             Arg::DashDash => todo!(),
             Arg::Named(name) => match state.feed_named(name) {
-                Ok(FeedNamedOk::Arg0) => args.check_no_value()?,
-                Ok(FeedNamedOk::Arg1(f)) => {
-                    let val = args.take_value()?;
-                    f(&mut state, val)?;
+                Some(place) => {
+                    if place.need_value() {
+                        let val = args.take_value()?;
+                        place.feed(val)?;
+                    } else {
+                        args.check_no_value()?;
+                    }
                 }
-                Err(None) => return Err(ErrorKind::UnknownNamedArgument.with_arg(name)),
-                Err(Some(err)) => return Err(err),
+                None => return Err(ErrorKind::UnknownNamedArgument.with_arg(name)),
             },
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg) {
                 Ok(()) => {}

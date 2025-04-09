@@ -33,8 +33,8 @@ pub mod __private {
 
     use crate::ErrorKind;
     pub use crate::internal::{
-        ArgsInternal, ArgsIter, CommandInternal, FeedNamed, FeedNamedOk, FeedUnnamed, ParserState,
-        try_parse_with_state,
+        ArgsInternal, ArgsIter, CommandInternal, FeedNamed, FeedUnnamed, ParserState,
+        place_for_flag, place_for_set_value, place_for_vec, try_parse_with_state,
     };
     pub use crate::{Args, Parser, Result, Subcommand};
 

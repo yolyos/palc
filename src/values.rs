@@ -7,12 +7,12 @@ use std::str::FromStr;
 
 use crate::{ErrorKind, Result};
 
-pub struct ArgValueInfo<T> {
-    pub parser: fn(Cow<'_, OsStr>) -> Result<T>,
+pub struct ArgValueInfo<P> {
+    pub parser: P, // impl Fn(Cow<'_, OsStr>) -> Result<T>
 }
 
 pub trait ArgValue: Sized + 'static {
-    const INFO: ArgValueInfo<Self>;
+    fn parse_value(value: Cow<'_, OsStr>) -> Result<Self>;
 }
 
 #[macro_export]
@@ -33,23 +33,25 @@ impl<T, Fuel> Deref for InferValueParser<T, &Fuel> {
 }
 
 impl<T: ArgValue> InferValueParser<T, &&&&()> {
-    pub fn get(&self) -> &'static ArgValueInfo<T> {
-        &T::INFO
+    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
+        ArgValueInfo {
+            parser: T::parse_value,
+        }
     }
 }
 
 impl<T: From<OsString>> InferValueParser<T, &&&()> {
-    pub fn get(&self) -> &'static ArgValueInfo<T> {
-        &ArgValueInfo {
-            parser: |v| Ok(v.into_owned().into()),
+    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
+        ArgValueInfo {
+            parser: |v: Cow<'_, OsStr>| Ok(v.into_owned().into()),
         }
     }
 }
 
 impl<T: From<String>> InferValueParser<T, &&()> {
-    pub fn get(&self) -> &'static ArgValueInfo<T> {
-        &ArgValueInfo {
-            parser: |v| {
+    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
+        ArgValueInfo {
+            parser: |v: Cow<'_, OsStr>| {
                 let s = v
                     .into_owned()
                     .into_string()
@@ -61,9 +63,9 @@ impl<T: From<String>> InferValueParser<T, &&()> {
 }
 
 impl<T: FromStr<Err: fmt::Display>> InferValueParser<T, &()> {
-    pub fn get(&self) -> &'static ArgValueInfo<T> {
-        &ArgValueInfo {
-            parser: |v| {
+    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
+        ArgValueInfo {
+            parser: |v: Cow<'_, OsStr>| {
                 let s = v
                     .to_str()
                     .ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?;

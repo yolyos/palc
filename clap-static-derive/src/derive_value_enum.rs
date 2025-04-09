@@ -65,14 +65,12 @@ impl ToTokens for ValueEnumImpl {
             impl __rt::ArgValue for #name {
                 // If this enum has no variants.
                 #[allow(unreachable_code)]
-                const INFO: __rt::ArgValueInfo<#name> = __rt::ArgValueInfo {
-                    parser: |__v| {
-                        __rt::Ok(match __rt::str_from_utf8(&__v)? {
-                            #(#variant_strs => #name :: #variant_names,)*
-                            __s => return __rt::invalid_value(__s)
-                        })
-                    },
-                };
+                fn parse_value(__v: __rt::Cow<'_, __rt::OsStr>) -> __rt::Result<Self> {
+                    __rt::Ok(match __rt::str_from_utf8(&__v)? {
+                        #(#variant_strs => #name :: #variant_names,)*
+                        __s => return __rt::invalid_value(__s)
+                    })
+                }
             }
         });
     }

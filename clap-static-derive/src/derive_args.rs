@@ -219,19 +219,13 @@ pub fn expand_state_def_impl(
                         let handler = match arg_kind {
                             ArgTyKind::Bool => quote! {{
                                 self.#field_name = true;
-                                __rt::Ok(__rt::FeedNamedOk::Arg0)
+                                __rt::place_for_flag()
                             }},
                             ArgTyKind::Vec(_) => quote! {
-                                __rt::Ok(__rt::FeedNamedOk::Arg1(|__s, __v| {
-                                    __s.#field_name.push(#parser(__v)?);
-                                    __rt::Ok(())
-                                }))
+                                __rt::place_for_vec(&mut self.#field_name, #parser)
                             },
                             ArgTyKind::Option(_) | ArgTyKind::Convert => quote! {
-                                __rt::Ok(__rt::FeedNamedOk::Arg1(|__s, __v| {
-                                    __s.#field_name = Some(#parser(__v)?);
-                                    __rt::Ok(())
-                                }))
+                                __rt::place_for_set_value(&mut self.#field_name, #parser)
                             },
                         };
 
@@ -348,11 +342,11 @@ impl ToTokens for ParserStateDefImpl {
                 type Output = #output_ty;
                 type Subcommand = #subcommand_ty;
 
-                fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<Self> {
-                    match __name {
+                fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
+                    __rt::Some(match __name {
                         #match_named_arms
-                        _ => __rt::Err(__rt::None)
-                    }
+                        _ => return __rt::None
+                    })
                 }
 
                 fn feed_unnamed(&mut self, __arg: &mut __rt::OsString) -> __rt::FeedUnnamed {
