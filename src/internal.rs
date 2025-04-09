@@ -4,12 +4,12 @@ use std::num::NonZero;
 
 use os_str_bytes::OsStrBytesExt;
 
-use crate::Result;
 use crate::error::ErrorKind;
+use crate::{Args, Result, Subcommand};
 
 use super::Error;
 
-/// An argument place with its place attached as `self`.
+/// A named argument with its place attached as `&mut self`.
 pub trait ArgPlace {
     fn need_value(&self) -> bool;
 
@@ -84,22 +84,49 @@ where
     unsafe { &mut *(place as *mut Option<T> as *mut Place<T, F>) }
 }
 
+/// A greedy unnamed argument with its place attached as `&mut self`.
+///
+/// It always consumes all the rest arguments.
+pub trait GreedyArgsPlace {
+    // TODO: Maybe avoid splitting out the first argument?
+    fn feed_greedy(&mut self, arg: OsString, _args: &mut ArgsIter<'_>) -> Result<()>;
+}
+
+pub fn place_for_subcommand<C: Subcommand>(place: &mut Option<C>) -> FeedUnnamed<'_> {
+    #[repr(transparent)]
+    struct Place<C>(Option<C>);
+
+    impl<C: CommandInternal> GreedyArgsPlace for Place<C> {
+        fn feed_greedy(&mut self, name: OsString, args: &mut ArgsIter<'_>) -> Result<()> {
+            let name = name
+                .to_str()
+                .ok_or_else(|| ErrorKind::InvalidUtf8(name.clone()))?;
+            self.0 = Some(C::try_parse_with_name(name, args)?);
+            Ok(())
+        }
+    }
+
+    let place = unsafe { &mut *(place as *mut Option<C> as *mut Place<C>) };
+    Ok(Some(place))
+}
+
 pub type FeedNamed<'s> = Option<&'s mut dyn ArgPlace>;
 
-/// This is actually `enum { Ok, Unknown, Err(Error) }`. Same as above.
-pub type FeedUnnamed = Result<(), Option<Error>>;
+/// This should be an enum, but be this for `?` support, which is unstable to impl.
+pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Error>>;
 
 pub trait ArgsInternal: Sized + 'static {
     type __State: ParserState<Output = Self>;
 }
 
-pub trait ParserState: Sized + 'static {
+pub trait ParserState: ParserStateDyn {
     type Output;
-    type Subcommand: crate::Subcommand;
 
     fn init() -> Self;
-    fn finish(self, subcmd: Option<Self::Subcommand>) -> Result<Self::Output>;
+    fn finish(self) -> Result<Self::Output>;
+}
 
+pub trait ParserStateDyn: 'static {
     fn feed_named(&mut self, _name: &str) -> FeedNamed<'_> {
         None
     }
@@ -113,8 +140,13 @@ pub trait CommandInternal: Sized {
     fn try_parse_with_name(name: &str, args: &mut ArgsIter<'_>) -> Result<Self>;
 }
 
-pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S::Output> {
-    let mut state = S::init();
+pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>) -> Result<A> {
+    let mut state = A::__State::init();
+    try_parse_with_state(&mut state, args)?;
+    state.finish()
+}
+
+pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<'_>) -> Result<()> {
     while let Some(arg) = args.cache_next_arg()? {
         match arg {
             Arg::DashDash => todo!(),
@@ -130,19 +162,14 @@ pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S
                 None => return Err(ErrorKind::UnknownNamedArgument.with_arg(name)),
             },
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg) {
-                Ok(()) => {}
+                Ok(None) => {}
+                Ok(Some(place)) => return place.feed_greedy(arg, args),
                 Err(Some(err)) => return Err(err),
-                Err(None) => {
-                    let arg = arg
-                        .to_str()
-                        .ok_or_else(|| ErrorKind::InvalidUtf8(arg.clone()))?;
-                    let subcmd = S::Subcommand::try_parse_with_name(arg, args)?;
-                    return state.finish(Some(subcmd));
-                }
+                Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
             },
         }
     }
-    state.finish(None)
+    Ok(())
 }
 
 pub struct ArgsIter<'a> {

@@ -1,11 +1,11 @@
 use std::convert::Infallible;
 use std::ffi::OsString;
 
-use crate::internal::{ArgsInternal, CommandInternal, try_parse_with_state};
+use crate::internal::{ArgsInternal, CommandInternal};
 
 pub use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 use error::ErrorKind;
-use internal::ArgsIter;
+use internal::{ArgsIter, try_parse_args};
 
 mod error;
 mod internal;
@@ -35,7 +35,8 @@ pub mod __private {
     use crate::ErrorKind;
     pub use crate::internal::{
         ArgsInternal, ArgsIter, CommandInternal, FeedNamed, FeedUnnamed, ParserState,
-        place_for_flag, place_for_set_value, place_for_vec, try_parse_with_state,
+        ParserStateDyn, place_for_flag, place_for_set_value, place_for_subcommand, place_for_vec,
+        try_parse_args, try_parse_with_state,
     };
     pub use crate::{Args, Parser, Result, Subcommand};
 
@@ -44,14 +45,14 @@ pub mod __private {
 
     impl<T: 'static> ParserState for FallbackState<T> {
         type Output = T;
-        type Subcommand = Infallible;
         fn init() -> Self {
             unimplemented!()
         }
-        fn finish(self, _subcmd: Option<Self::Subcommand>) -> Result<Self::Output> {
+        fn finish(self) -> Result<Self::Output> {
             match self {}
         }
     }
+    impl<T: 'static> ParserStateDyn for FallbackState<T> {}
 
     pub fn unknown_subcommand<T>(arg: &str) -> Result<T> {
         Err(ErrorKind::UnknownSubcommand(arg.into()).into())
@@ -80,7 +81,7 @@ pub mod __private {
 }
 
 /// Top-level command interface.
-pub trait Parser: Sized + 'static + ArgsInternal {
+pub trait Parser: Sized + 'static + Args {
     fn parse() -> Self {
         match Self::try_parse_from(std::env::args_os()) {
             Ok(v) => v,
@@ -98,7 +99,7 @@ pub trait Parser: Sized + 'static + ArgsInternal {
     {
         let mut iter = iter.into_iter().skip(1).map(|s| s.into());
         let mut args = ArgsIter::new(&mut iter);
-        try_parse_with_state::<Self::__State>(&mut args)
+        try_parse_args::<Self>(&mut args)
     }
 }
 

@@ -59,11 +59,13 @@ impl ToTokens for VariantImpl {
                 __rt::Ok(Self::#variant_name)
             },
             VariantImpl::Tuple { variant_name, ty } => quote! {
-                __rt::try_parse_with_state::<<#ty as __rt::ArgsInternal>::__State>(__args).map(Self::#variant_name)
+                __rt::try_parse_args::<#ty>(__args).map(Self::#variant_name)
             },
-            VariantImpl::Struct { state_name } => quote! {
-                __rt::try_parse_with_state::<#state_name>(__args)
-            },
+            VariantImpl::Struct { state_name } => quote! {{
+                let mut __state = <#state_name as __rt::ParserState>::init();
+                __rt::try_parse_with_state(&mut __state, __args)?;
+                __rt::ParserState::finish(__state)
+            }},
         })
     }
 }
