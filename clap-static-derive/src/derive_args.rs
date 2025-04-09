@@ -189,7 +189,7 @@ pub fn expand_state_def_impl(
                         FieldFinish::Id,
                         quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
                     ),
-                    ArgTyKind::Option(subty) => (
+                    ArgTyKind::OptionVec(subty) | ArgTyKind::Option(subty) => (
                         quote! { #field_ty },
                         quote! { __rt::None },
                         FieldFinish::Id,
@@ -221,6 +221,13 @@ pub fn expand_state_def_impl(
                                 check_variable_arg(field_name.span())?;
                                 out.handle_last_unnamed = Some(quote! {{
                                     self.#field_name.push(#parser(__rt::take_arg(__arg))?);
+                                    __rt::Ok(())
+                                }});
+                            }
+                            ArgTyKind::OptionVec(_) => {
+                                check_variable_arg(field_name.span())?;
+                                out.handle_last_unnamed = Some(quote! {{
+                                    self.#field_name.get_or_insert_default().push(#parser(__rt::take_arg(__arg))?);
                                     __rt::Ok(())
                                 }});
                             }
@@ -256,6 +263,9 @@ pub fn expand_state_def_impl(
                             }},
                             ArgTyKind::Vec(_) => quote! {
                                 __rt::place_for_vec(&mut self.#field_name, #parser)
+                            },
+                            ArgTyKind::OptionVec(_) => quote! {
+                                __rt::place_for_vec(self.#field_name.get_or_insert_default(), #parser)
                             },
                             ArgTyKind::Option(_) | ArgTyKind::Convert => quote! {
                                 __rt::place_for_set_value(&mut self.#field_name, #parser)

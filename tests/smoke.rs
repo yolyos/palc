@@ -33,7 +33,7 @@ enum Commands {
         #[arg(short, long)]
         list: bool,
 
-        files: Vec<PathBuf>,
+        files: Option<Vec<PathBuf>>,
     },
 }
 
@@ -70,7 +70,7 @@ fn smoke() {
             debug: false,
             command: Some(Commands::Test {
                 list: true,
-                files: vec![PathBuf::from("hello"), PathBuf::from("world")],
+                files: Some(vec![PathBuf::from("hello"), PathBuf::from("world")]),
             }),
         }
     );

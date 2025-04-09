@@ -64,6 +64,7 @@ pub enum ArgTyKind<'a> {
     Option(&'a Type),
     Convert,
     Vec(&'a Type),
+    OptionVec(&'a Type),
 }
 
 impl ArgField {
@@ -72,11 +73,15 @@ impl ArgField {
         if matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident(TY_BOOL)) {
             return ArgTyKind::Bool;
         }
-        if let Some(arg_ty) = strip_ty_ctor(ty, TY_OPTION) {
-            return ArgTyKind::Option(arg_ty);
+        if let Some(subty) = strip_ty_ctor(ty, TY_OPTION) {
+            if let Some(subty) = strip_ty_ctor(subty, TY_VEC) {
+                return ArgTyKind::OptionVec(subty);
+            } else {
+                return ArgTyKind::Option(subty);
+            }
         }
-        if let Some(arg_ty) = strip_ty_ctor(ty, TY_VEC) {
-            return ArgTyKind::Vec(arg_ty);
+        if let Some(subty) = strip_ty_ctor(ty, TY_VEC) {
+            return ArgTyKind::Vec(subty);
         }
         ArgTyKind::Convert
     }
