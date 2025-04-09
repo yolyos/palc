@@ -91,57 +91,75 @@ fn parse_arg_or_command(attrs: Vec<Attribute>) -> Result<ArgOrCommand> {
             if arg.is_some() {
                 return Err(Error::duplicate_field("arg").with_span(&path.span()));
             }
-            arg = Some(Arg::from_meta(&attr.meta)?);
+            arg = Some(ArgMeta::from_meta(&attr.meta)?);
         } else if path.is_ident("command") {
             if command.is_some() {
                 return Err(Error::duplicate_field("command").with_span(&path.span()));
             }
-            command = Some((path.span(), Command::from_meta(&attr.meta)?));
+            command = Some((path.span(), CommandMeta::from_meta(&attr.meta)?));
         }
     }
-    match (arg, command) {
-        (None, None) => Ok(ArgOrCommand::None),
-        (Some(arg), None) => Ok(ArgOrCommand::Arg(arg)),
-        (None, Some((_, cmd))) => Ok(ArgOrCommand::Command(cmd)),
-        (Some(_), Some((span, _))) => {
-            Err(Error::custom("#[arg(..)] conflicts with #[command(..)]").with_span(&span))
-        }
+    if let (Some(_), Some((span, _))) = (&arg, &command) {
+        return Err(Error::custom("#[arg(..)] conflicts with #[command(..)]").with_span(span));
     }
+
+    if let Some((_, cmd)) = &command {
+        if cmd.subcommand {
+            return Ok(ArgOrCommand::Subcommand);
+        }
+        return Ok(ArgOrCommand::Flatten);
+    }
+
+    Ok(ArgOrCommand::Arg(match arg {
+        Some(arg) if arg.long.is_some() || arg.short.is_some() => Arg::Named(NamedArg {
+            long: arg.long,
+            short: arg.short,
+        }),
+        _ => Arg::Unnamed,
+    }))
 }
 
 pub enum ArgOrCommand {
-    None,
     Arg(Arg),
-    Command(Command),
+    Subcommand,
+    Flatten,
 }
 
-#[derive(FromMeta)]
-#[darling(and_then = Arg::validate)]
-#[cfg_attr(feature = "__test-allow-unknown-fields", darling(allow_unknown_fields))]
-pub struct Arg {
+pub enum Arg {
+    Named(NamedArg),
+    Unnamed,
+}
+
+pub struct NamedArg {
     pub long: Option<Override<String>>,
     pub short: Option<Override<char>>,
 }
 
-impl Arg {
-    fn validate(self) -> Result<Self> {
-        if self.long.is_none() && self.short.is_none() {
-            return Err(Error::custom("no-op `#[arg(..)]`"));
-        }
-        Ok(self)
-    }
+#[derive(FromMeta)]
+#[cfg_attr(feature = "__test-allow-unknown-fields", darling(allow_unknown_fields))]
+struct ArgMeta {
+    long: Option<Override<String>>,
+    short: Option<Override<char>>,
 }
 
 #[derive(FromMeta)]
-#[darling(and_then = Command::validate)]
-pub struct Command {
+#[darling(and_then = CommandMeta::validate)]
+pub struct CommandMeta {
+    #[darling(default)]
     pub subcommand: bool,
+    #[darling(default)]
+    pub flatten: bool,
 }
 
-impl Command {
+impl CommandMeta {
     fn validate(self) -> Result<Self> {
-        if !self.subcommand {
-            return Err(Error::custom("no-op `#[subcommand(..)]`"));
+        if !self.subcommand && !self.flatten {
+            return Err(Error::custom("empty `#[command(..)]`"));
+        }
+        if self.subcommand && self.flatten {
+            return Err(Error::custom(
+                "`#[command(subcommand)]` conflicts with `#[command(flatten)]`",
+            ));
         }
         Ok(self)
     }
