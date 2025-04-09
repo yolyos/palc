@@ -93,15 +93,15 @@ pub trait ArgsInternal: Sized + 'static {
     type __State: ParserState<Output = Self>;
 }
 
-pub trait ParserState: Sized + Default + 'static {
+pub trait ParserState: Sized + 'static {
     type Output;
     type Subcommand: crate::Subcommand;
 
-    fn feed_named(&mut self, name: &str) -> FeedNamed<'_>;
-
-    fn feed_unnamed(&mut self, arg: &mut OsString) -> FeedUnnamed;
-
+    fn init() -> Self;
     fn finish(self, subcmd: Option<Self::Subcommand>) -> Result<Self::Output>;
+
+    fn feed_named(&mut self, name: &str) -> FeedNamed<'_>;
+    fn feed_unnamed(&mut self, arg: &mut OsString) -> FeedUnnamed;
 }
 
 pub trait CommandInternal: Sized {
@@ -109,7 +109,7 @@ pub trait CommandInternal: Sized {
 }
 
 pub fn try_parse_with_state<S: ParserState>(args: &mut ArgsIter<'_>) -> Result<S::Output> {
-    let mut state = S::default();
+    let mut state = S::init();
     while let Some(arg) = args.cache_next_arg()? {
         match arg {
             Arg::DashDash => todo!(),

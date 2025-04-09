@@ -96,6 +96,7 @@ pub struct ParserStateDefImpl {
 struct FieldInfo {
     name: Ident,
     state_ty: TokenStream,
+    default: TokenStream,
     display_name: String,
     finish: FieldFinish,
 }
@@ -151,7 +152,7 @@ pub fn expand_state_def_impl(
         match &field.attrs {
             ArgOrCommand::Arg(arg) => {
                 let arg_kind = field.arg_ty_kind();
-                let (state_ty, parser, finish) = match arg_kind {
+                let (state_ty, default, finish, parser) = match arg_kind {
                     ArgTyKind::Bool => {
                         if matches!(arg, Arg::Unnamed) {
                             return Err(syn::Error::new(
@@ -159,22 +160,30 @@ pub fn expand_state_def_impl(
                                 "positional arguments cannot be `bool`",
                             ));
                         }
-                        (quote! { bool }, TokenStream::new(), FieldFinish::Id)
+                        (
+                            quote! { bool },
+                            quote! { false },
+                            FieldFinish::Id,
+                            TokenStream::new(),
+                        )
                     }
                     ArgTyKind::Vec(subty) => (
                         quote! { #field_ty },
-                        quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
+                        quote! { __rt::Vec::new() },
                         FieldFinish::Id,
+                        quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
                     ),
                     ArgTyKind::Option(subty) => (
                         quote! { #field_ty },
-                        quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
+                        quote! { __rt::None },
                         FieldFinish::Id,
+                        quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
                     ),
                     ArgTyKind::Convert => (
                         quote! { __rt::Option<#field_ty> },
-                        quote_spanned!(field_ty.span()=> (__rt::arg_value_info!(#field_ty).parser)),
+                        quote! { __rt::None },
                         FieldFinish::Unwrap,
+                        quote_spanned!(field_ty.span()=> (__rt::arg_value_info!(#field_ty).parser)),
                     ),
                 };
 
@@ -243,6 +252,7 @@ pub fn expand_state_def_impl(
 
                 out.fields.push(FieldInfo {
                     name: field_name,
+                    default,
                     state_ty,
                     display_name,
                     finish,
@@ -277,6 +287,7 @@ pub fn expand_state_def_impl(
                 out.fields.push(FieldInfo {
                     name: field_name,
                     state_ty: quote_spanned!(field_ty.span()=> <#field_ty as __rt::ArgsInternal>::__State),
+                    default: quote_spanned!(field_ty.span()=> __rt::ParserState::init()),
                     display_name: String::new(),
                     finish: FieldFinish::Finish,
                 });
@@ -320,6 +331,7 @@ impl ToTokens for ParserStateDefImpl {
 
         let field_names = fields.iter().map(|f| &f.name).collect::<Vec<_>>();
         let field_tys = fields.iter().map(|f| &f.state_ty);
+        let field_defaults = fields.iter().map(|f| &f.default);
         let field_finishes = fields.iter().map(|f| {
             let name = &f.name;
             match f.finish {
@@ -373,7 +385,6 @@ impl ToTokens for ParserStateDefImpl {
         tokens.extend(quote! {
             // Inherited visibility is needed to avoid "private type in public interface".
             // It is always invisible from user site because we are in an anonymous scope.
-            #[derive(Default)]
             #vis struct #state_name {
                 #(#field_names : #field_tys,)*
             }
@@ -382,6 +393,20 @@ impl ToTokens for ParserStateDefImpl {
             impl __rt::ParserState for #state_name {
                 type Output = #output_ty;
                 type Subcommand = #subcommand_ty;
+
+                fn init() -> Self {
+                    Self {
+                        #(#field_names : #field_defaults,)*
+                    }
+                }
+
+                fn finish(self, __subcmd: __rt::Option<Self::Subcommand>) -> __rt::Result<Self::Output> {
+                    #check_missing
+                    __rt::Ok(#output_ctor {
+                        #(#field_names : #field_finishes,)*
+                        #subcommand_finish
+                    })
+                }
 
                 // TODO: Simplify for zero arms.
                 #[allow(unreachable_code)]
@@ -397,13 +422,6 @@ impl ToTokens for ParserStateDefImpl {
                     #handle_last_unnamed
                 }
 
-                fn finish(self, __subcmd: __rt::Option<Self::Subcommand>) -> __rt::Result<Self::Output> {
-                    #check_missing
-                    __rt::Ok(#output_ctor {
-                        #(#field_names : #field_finishes,)*
-                        #subcommand_finish
-                    })
-                }
             }
         });
     }
