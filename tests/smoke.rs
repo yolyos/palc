@@ -1,13 +1,13 @@
 use std::path::PathBuf;
 
-use clap_static::{Parser, Subcommand, ValueEnum};
+use clap_static::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, PartialEq, Parser)]
 struct MyCli {
     name: Option<String>,
 
-    #[arg(short, long)]
-    config: PathBuf,
+    #[command(flatten)]
+    config: Config,
 
     #[arg(short = 'v')]
     debug: bool,
@@ -17,6 +17,14 @@ struct MyCli {
 
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+#[derive(Debug, PartialEq, Args)]
+struct Config {
+    #[arg(long)]
+    config_file: Option<PathBuf>,
+    #[arg(long)]
+    config: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Subcommand)]
@@ -55,7 +63,10 @@ fn smoke() {
         MyCli {
             color: Color::Always,
             name: Some("bar".into()),
-            config: "foo".into(),
+            config: Config {
+                config_file: None,
+                config: Some("foo".into())
+            },
             debug: false,
             command: Some(Commands::Test {
                 list: true,

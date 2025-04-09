@@ -86,6 +86,7 @@ pub struct ParserStateDefImpl {
     fields: Vec<FieldInfo>,
 
     match_named_arms: TokenStream,
+    flatten_fields: Vec<usize>,
     handle_unnamed: TokenStream,
     handle_last_unnamed: Option<TokenStream>,
 
@@ -96,13 +97,19 @@ struct FieldInfo {
     name: Ident,
     state_ty: TokenStream,
     display_name: String,
-    needs_unwrap: bool,
+    finish: FieldFinish,
 }
 
 struct SubcommandInfo {
     field: Ident,
     ty: TokenStream,
     needs_unwrap: bool,
+}
+
+enum FieldFinish {
+    Id,
+    Unwrap,
+    Finish,
 }
 
 pub fn expand_state_def_impl(
@@ -118,6 +125,7 @@ pub fn expand_state_def_impl(
         output_ctor: None,
         fields: Vec::with_capacity(input_fields.len()),
         match_named_arms: TokenStream::new(),
+        flatten_fields: Vec::new(),
         handle_unnamed: TokenStream::new(),
         handle_last_unnamed: None,
         subcommand: None,
@@ -143,7 +151,7 @@ pub fn expand_state_def_impl(
         match &field.attrs {
             ArgOrCommand::Arg(arg) => {
                 let arg_kind = field.arg_ty_kind();
-                let (state_ty, parser, needs_unwrap) = match arg_kind {
+                let (state_ty, parser, finish) = match arg_kind {
                     ArgTyKind::Bool => {
                         if matches!(arg, Arg::Unnamed) {
                             return Err(syn::Error::new(
@@ -151,22 +159,22 @@ pub fn expand_state_def_impl(
                                 "positional arguments cannot be `bool`",
                             ));
                         }
-                        (quote! { bool }, TokenStream::new(), false)
+                        (quote! { bool }, TokenStream::new(), FieldFinish::Id)
                     }
                     ArgTyKind::Vec(subty) => (
                         quote! { #field_ty },
                         quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
-                        false,
+                        FieldFinish::Id,
                     ),
                     ArgTyKind::Option(subty) => (
                         quote! { #field_ty },
                         quote_spanned!(subty.span()=> (__rt::arg_value_info!(#subty).parser)),
-                        false,
+                        FieldFinish::Id,
                     ),
                     ArgTyKind::Convert => (
                         quote! { __rt::Option<#field_ty> },
                         quote_spanned!(field_ty.span()=> (__rt::arg_value_info!(#field_ty).parser)),
-                        true,
+                        FieldFinish::Unwrap,
                     ),
                 };
 
@@ -237,7 +245,7 @@ pub fn expand_state_def_impl(
                     name: field_name,
                     state_ty,
                     display_name,
-                    needs_unwrap,
+                    finish,
                 });
             }
             ArgOrCommand::Subcommand => {
@@ -257,7 +265,22 @@ pub fn expand_state_def_impl(
                     }
                 });
             }
-            ArgOrCommand::Flatten => todo!(),
+            ArgOrCommand::Flatten => {
+                out.flatten_fields.push(out.fields.len());
+                // FIXME: This is lengthy and slow.
+                out.handle_unnamed.extend(quote! {
+                    match __rt::ParserState::feed_unnamed(&mut self.#field_name, __arg) {
+                        __rt::Err(__rt::None) => {},
+                        __ret => return __ret
+                    }
+                });
+                out.fields.push(FieldInfo {
+                    name: field_name,
+                    state_ty: quote_spanned!(field_ty.span()=> <#field_ty as __rt::ArgsInternal>::__State),
+                    display_name: String::new(),
+                    finish: FieldFinish::Finish,
+                });
+            }
         }
     }
 
@@ -273,6 +296,7 @@ impl ToTokens for ParserStateDefImpl {
             output_ctor,
             fields,
             match_named_arms,
+            flatten_fields,
             handle_unnamed,
             handle_last_unnamed,
             subcommand,
@@ -284,7 +308,7 @@ impl ToTokens for ParserStateDefImpl {
             .filter_map(|f| {
                 let name = &f.name;
                 let display_name = &f.display_name;
-                f.needs_unwrap.then(|| {
+                matches!(f.finish, FieldFinish::Unwrap).then(|| {
                     quote! {
                         if self.#name.is_none() {
                             return __rt::missing_required_arg(#display_name);
@@ -298,10 +322,12 @@ impl ToTokens for ParserStateDefImpl {
         let field_tys = fields.iter().map(|f| &f.state_ty);
         let field_finishes = fields.iter().map(|f| {
             let name = &f.name;
-            if f.needs_unwrap {
-                quote! { self.#name.unwrap() }
-            } else {
-                quote! { self.#name }
+            match f.finish {
+                FieldFinish::Id => quote! { self.#name },
+                FieldFinish::Unwrap => quote! { self.#name.unwrap() },
+                FieldFinish::Finish => {
+                    quote! { __rt::ParserState::finish(self.#name, __rt::None)? }
+                }
             }
         });
 
@@ -329,6 +355,21 @@ impl ToTokens for ParserStateDefImpl {
             }
         };
 
+        let match_named_last = match &**flatten_fields {
+            [] => quote!(return __rt::None),
+            [prevs @ .., last] => {
+                let names = prevs.iter().map(|&idx| &fields[idx].name);
+                let last_name = &fields[*last].name;
+                quote! {
+                    #(if let __rt::Some(__r) = __rt::ParserState::feed_named(&mut self.#names, __name) {
+                        __r
+                    } else)* {
+                        return __rt::ParserState::feed_named(&mut self.#last_name, __name)
+                    }
+                }
+            }
+        };
+
         tokens.extend(quote! {
             // Inherited visibility is needed to avoid "private type in public interface".
             // It is always invisible from user site because we are in an anonymous scope.
@@ -342,10 +383,12 @@ impl ToTokens for ParserStateDefImpl {
                 type Output = #output_ty;
                 type Subcommand = #subcommand_ty;
 
+                // TODO: Simplify for zero arms.
+                #[allow(unreachable_code)]
                 fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
                     __rt::Some(match __name {
                         #match_named_arms
-                        _ => return __rt::None
+                        _ => #match_named_last
                     })
                 }
 
