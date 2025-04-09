@@ -208,6 +208,15 @@ pub fn expand_state_def_impl(
                         .clone()
                         .unwrap_or_else(|| heck::AsShoutySnakeCase(field_name_str).to_string());
 
+                    if arg.trailing_var_arg
+                        && !matches!(arg_kind, ArgTyKind::Vec(_) | ArgTyKind::OptionVec(_))
+                    {
+                        return Err(syn::Error::new(
+                            field_ty.span(),
+                            "arg(trailing_var_arg) can only be used on arguments with `Vec`-like types",
+                        ));
+                    }
+
                     match arg_kind {
                         ArgTyKind::Bool => unreachable!(),
                         ArgTyKind::Option(_) | ArgTyKind::Convert => {
@@ -218,19 +227,23 @@ pub fn expand_state_def_impl(
                                 }
                             });
                         }
-                        ArgTyKind::Vec(_) => {
+                        ArgTyKind::Vec(_) | ArgTyKind::OptionVec(_) => {
                             check_variable_arg(field_name.span())?;
-                            out.handle_last_unnamed = Some(quote! {{
-                                self.#field_name.push(#parser(__rt::take_arg(__arg))?);
-                                __rt::Ok(__rt::None)
-                            }});
-                        }
-                        ArgTyKind::OptionVec(_) => {
-                            check_variable_arg(field_name.span())?;
-                            out.handle_last_unnamed = Some(quote! {{
-                                self.#field_name.get_or_insert_default().push(#parser(__rt::take_arg(__arg))?);
-                                __rt::Ok(__rt::None)
-                            }});
+                            let get_or_insert =
+                                matches!(arg_kind, ArgTyKind::OptionVec(_)).then(|| {
+                                    quote! { .get_or_insert_default() }
+                                });
+                            let handler = if arg.trailing_var_arg {
+                                quote! {
+                                    __rt::place_for_trailing_var_arg(&mut self.#field_name #get_or_insert, #parser)
+                                }
+                            } else {
+                                quote! {{
+                                    self.#field_name #get_or_insert.push(#parser(__rt::take_arg(__arg))?);
+                                    __rt::Ok(__rt::None)
+                                }}
+                            };
+                            out.handle_last_unnamed = Some(handler);
                         }
                     }
                 } else {

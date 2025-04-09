@@ -138,9 +138,13 @@ pub struct ArgMeta {
     pub value_name: Option<String>,
     // TODO: {,visible_}{,short_}alias{,es}, value_names
 
-    // Argument behaviors.
+    // Named argument behaviors.
     pub require_equals: bool,
-    // TODO: global, trailing_var_args, last, raw
+    // TODO: global
+
+    // Unnamed argument behaviors.
+    pub trailing_var_arg: bool,
+    // TODO: last, raw
 
     // Value behaviors.
     // TODO: num_args, value_delimiter, default_value,
@@ -173,7 +177,13 @@ impl ArgMeta {
     }
 
     fn validate(self) -> Result<Self> {
-        if !self.is_named() && self.require_equals {
+        if self.is_named() {
+            if self.trailing_var_arg {
+                return Err(Error::custom(
+                    "arg(trailing_var_arg) is only useful for positional arguments",
+                ));
+            }
+        } else if self.require_equals {
             return Err(Error::custom(
                 "arg(require_equals) is only useful for named arguments",
             ));

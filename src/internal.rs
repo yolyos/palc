@@ -108,6 +108,35 @@ pub trait GreedyArgsPlace {
     fn feed_greedy(&mut self, arg: OsString, _args: &mut ArgsIter<'_>) -> Result<()>;
 }
 
+pub fn place_for_trailing_var_arg<T, F>(place: &mut Vec<T>, _f: F) -> FeedUnnamed<'_>
+where
+    F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
+{
+    #[repr(C)]
+    struct Place<T, F>(Vec<T>, F);
+
+    impl<T, F> GreedyArgsPlace for Place<T, F>
+    where
+        F: Fn(Cow<'_, OsStr>) -> Result<T>,
+    {
+        fn feed_greedy(&mut self, arg: OsString, args: &mut ArgsIter<'_>) -> Result<()> {
+            self.0.push((self.1)(Cow::Owned(arg))?);
+            if let Some(high) = args.iter.size_hint().1 {
+                self.0.reserve(high);
+            }
+            for s in &mut *args.iter {
+                self.0.push((self.1)(Cow::Owned(s))?);
+            }
+            Ok(())
+        }
+    }
+
+    assert_eq!(size_of::<F>(), 0);
+    assert_eq!(align_of::<F>(), 1);
+    let place = unsafe { &mut *(place as *mut Vec<T> as *mut Place<T, F>) };
+    Ok(Some(place))
+}
+
 pub fn place_for_subcommand<C: Subcommand>(place: &mut Option<C>) -> FeedUnnamed<'_> {
     #[repr(transparent)]
     struct Place<C>(Option<C>);
