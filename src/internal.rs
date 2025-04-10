@@ -176,7 +176,7 @@ pub trait ParserStateDyn: 'static {
         None
     }
 
-    fn feed_unnamed(&mut self, _arg: &mut OsString) -> FeedUnnamed {
+    fn feed_unnamed(&mut self, _arg: &mut OsString, _is_last: bool) -> FeedUnnamed {
         Err(None)
     }
 }
@@ -201,7 +201,17 @@ pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>) -> Result<A> {
 pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<'_>) -> Result<()> {
     while let Some(arg) = args.cache_next_arg()? {
         match arg {
-            Arg::DashDash => todo!(),
+            Arg::DashDash => {
+                drop(arg);
+                for mut arg in &mut args.iter {
+                    match state.feed_unnamed(&mut arg, true) {
+                        Ok(None) => {}
+                        Ok(Some(place)) => return place.feed_greedy(arg, args),
+                        Err(Some(err)) => return Err(err),
+                        Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
+                    }
+                }
+            }
             Arg::Named(name) => match state.feed_named(name) {
                 Some(place) => match place.num_values() {
                     NumValues::Zero => args.check_no_value()?,
@@ -218,7 +228,7 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                 },
                 None => return Err(ErrorKind::UnknownNamedArgument.with_arg(name)),
             },
-            Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg) {
+            Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, false) {
                 Ok(None) => {}
                 Ok(Some(place)) => return place.feed_greedy(arg, args),
                 Err(Some(err)) => return Err(err),

@@ -144,7 +144,8 @@ pub struct ArgMeta {
 
     // Unnamed argument behaviors.
     pub trailing_var_arg: bool,
-    // TODO: last, raw
+    pub last: bool,
+    // TODO: raw
 
     // Value behaviors.
     // TODO: num_args, value_delimiter, default_value,
@@ -178,9 +179,9 @@ impl ArgMeta {
 
     fn validate(self) -> Result<Self> {
         if self.is_named() {
-            if self.trailing_var_arg {
+            if self.trailing_var_arg || self.last {
                 return Err(Error::custom(
-                    "arg(trailing_var_arg) is only useful for positional arguments",
+                    "arg(trailing_var_arg, last) is only useful for positional arguments",
                 ));
             }
         } else if self.require_equals {

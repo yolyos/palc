@@ -102,7 +102,9 @@ pub struct ParserStateDefImpl {
     match_named_arms: TokenStream,
     flatten_fields: Vec<usize>,
     handle_unnamed: TokenStream,
-    handle_last_unnamed: Option<TokenStream>,
+    handle_catchall_unnamed: Option<TokenStream>,
+
+    last_va_arg_handler: Option<TokenStream>,
 }
 
 struct FieldInfo {
@@ -135,7 +137,8 @@ pub fn expand_state_def_impl(
         match_named_arms: TokenStream::new(),
         flatten_fields: Vec::new(),
         handle_unnamed: TokenStream::new(),
-        handle_last_unnamed: None,
+        handle_catchall_unnamed: None,
+        last_va_arg_handler: None,
     };
     let mut variable_arg_span = None;
     let mut check_variable_arg = |span: Span| -> syn::Result<()> {
@@ -158,6 +161,16 @@ pub fn expand_state_def_impl(
         match &field.attrs {
             ArgOrCommand::Arg(arg) => {
                 let arg_kind = field.arg_ty_kind();
+                if arg.last
+                    && (arg.is_named()
+                        || !matches!(arg_kind, ArgTyKind::Vec(_) | ArgTyKind::OptionVec(_)))
+                {
+                    return Err(syn::Error::new(
+                        field_ty.span(),
+                        "arg(last) must be used on a `Vec`-like positional argument",
+                    ));
+                }
+
                 let (value_ty, state_ty, default, finish) = match arg_kind {
                     ArgTyKind::Bool => {
                         if !arg.is_named() {
@@ -228,7 +241,6 @@ pub fn expand_state_def_impl(
                             });
                         }
                         ArgTyKind::Vec(_) | ArgTyKind::OptionVec(_) => {
-                            check_variable_arg(field_name.span())?;
                             let get_or_insert =
                                 matches!(arg_kind, ArgTyKind::OptionVec(_)).then(|| {
                                     quote! { .get_or_insert_default() }
@@ -243,7 +255,15 @@ pub fn expand_state_def_impl(
                                     __rt::Ok(__rt::None)
                                 }}
                             };
-                            out.handle_last_unnamed = Some(handler);
+                            if !arg.last {
+                                check_variable_arg(field_name.span())?;
+                                out.handle_catchall_unnamed = Some(handler);
+                            } else if out.last_va_arg_handler.replace(handler).is_some() {
+                                return Err(syn::Error::new(
+                                    field_name.span(),
+                                    "duplicated arg(last) fields",
+                                ));
+                            }
                         }
                     }
                 } else {
@@ -311,7 +331,7 @@ pub fn expand_state_def_impl(
                     None => (quote! { #field_ty }, FieldFinish::UnwrapSubcommand),
                 };
 
-                out.handle_last_unnamed = Some(quote! {
+                out.handle_catchall_unnamed = Some(quote! {
                     __rt::place_for_subcommand(&mut self.#field_name)
                 });
                 out.fields.push(FieldInfo {
@@ -326,7 +346,7 @@ pub fn expand_state_def_impl(
                 out.flatten_fields.push(out.fields.len());
                 // FIXME: This is lengthy and slow.
                 out.handle_unnamed.extend(quote! {
-                    match __rt::ParserStateDyn::feed_unnamed(&mut self.#field_name, __arg) {
+                    match __rt::ParserStateDyn::feed_unnamed(&mut self.#field_name, __arg, __is_last) {
                         __rt::Err(__rt::None) => {},
                         __ret => return __ret
                     }
@@ -356,7 +376,8 @@ impl ToTokens for ParserStateDefImpl {
             match_named_arms,
             flatten_fields,
             handle_unnamed,
-            handle_last_unnamed,
+            handle_catchall_unnamed,
+            last_va_arg_handler,
         } = self;
         let output_ctor = output_ctor.as_ref().unwrap_or(&self.output_ty);
 
@@ -397,7 +418,7 @@ impl ToTokens for ParserStateDefImpl {
             }
         });
 
-        let handle_last_unnamed = handle_last_unnamed.clone().unwrap_or_else(|| {
+        let handle_catchall_unnamed = handle_catchall_unnamed.clone().unwrap_or_else(|| {
             quote! { __rt::Err(__rt::None) }
         });
 
@@ -415,6 +436,20 @@ impl ToTokens for ParserStateDefImpl {
                 }
             }
         };
+
+        let mut feed_unnamed_body = quote! {
+            #handle_unnamed
+            #handle_catchall_unnamed
+        };
+        if let Some(handler) = last_va_arg_handler {
+            feed_unnamed_body = quote! {
+                if !__is_last {
+                    #feed_unnamed_body
+                } else {
+                    #handler
+                }
+            };
+        }
 
         tokens.extend(quote! {
             // Inherited visibility is needed to avoid "private type in public interface".
@@ -452,9 +487,8 @@ impl ToTokens for ParserStateDefImpl {
                     })
                 }
 
-                fn feed_unnamed(&mut self, __arg: &mut __rt::OsString) -> __rt::FeedUnnamed {
-                    #handle_unnamed
-                    #handle_last_unnamed
+                fn feed_unnamed(&mut self, __arg: &mut __rt::OsString, __is_last: bool) -> __rt::FeedUnnamed {
+                    #feed_unnamed_body
                 }
             }
         });
