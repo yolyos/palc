@@ -19,8 +19,8 @@ struct SubcommandDef {
 pub(crate) fn expand(input: DeriveInput) -> TokenStream {
     let mut tts = match SubcommandDef::from_derive_input(&input) {
         Err(err) => err.write_errors(),
-        Ok(def) => match expand_impl(def) {
-            Ok(tts) => return wrap_anon_item(tts),
+        Ok(def) => match expand_impl(&def) {
+            Ok(out) => return wrap_anon_item(out),
             Err(err) => err.into_compile_error(),
         },
     };
@@ -40,19 +40,26 @@ pub(crate) fn expand(input: DeriveInput) -> TokenStream {
     tts
 }
 
-struct SubcommandImpl {
-    enum_name: Ident,
-    state_defs: Vec<ParserStateDefImpl>,
-    variants: Vec<(String, VariantImpl)>,
+struct SubcommandImpl<'i> {
+    enum_name: &'i Ident,
+    state_defs: Vec<ParserStateDefImpl<'i>>,
+    variants: Vec<(String, VariantImpl<'i>)>,
 }
 
-enum VariantImpl {
-    Unit { variant_name: Ident },
-    Tuple { variant_name: Ident, ty: Type },
-    Struct { state_name: Ident },
+enum VariantImpl<'i> {
+    Unit {
+        variant_name: &'i Ident,
+    },
+    Tuple {
+        variant_name: &'i Ident,
+        ty: &'i Type,
+    },
+    Struct {
+        state_name: Ident,
+    },
 }
 
-impl ToTokens for VariantImpl {
+impl ToTokens for VariantImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.extend(match self {
             VariantImpl::Unit { variant_name } => quote! {
@@ -70,8 +77,10 @@ impl ToTokens for VariantImpl {
     }
 }
 
-fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
-    let input_variants = def.data.take_enum().expect("checked by darling");
+fn expand_impl(def: &SubcommandDef) -> syn::Result<SubcommandImpl<'_>> {
+    let darling::ast::Data::Enum(input_variants) = &def.data else {
+        unreachable!("checked by darling")
+    };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
         return Err(syn::Error::new(
@@ -80,19 +89,19 @@ fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
         ));
     }
 
-    let enum_name = def.ident;
+    let enum_name = &def.ident;
     let mut state_defs = Vec::with_capacity(input_variants.len());
 
     let variants = input_variants
         .into_iter()
-        .map(|mut variant| {
-            let variant_name = variant.ident;
+        .map(|variant| {
+            let variant_name = &variant.ident;
             let arg_name = heck::AsKebabCase(variant_name.to_string()).to_string();
             let act = match variant.fields.style {
                 Style::Unit => VariantImpl::Unit { variant_name },
                 Style::Tuple if variant.fields.fields.len() == 1 => VariantImpl::Tuple {
                     variant_name,
-                    ty: variant.fields.fields.pop().unwrap().ty,
+                    ty: &variant.fields.fields[0].ty,
                 },
                 Style::Tuple => {
                     return Err(syn::Error::new(
@@ -104,7 +113,7 @@ fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
                     let state_name =
                         format_ident!("{enum_name}{variant_name}State", span = variant_name.span());
                     let mut state = crate::derive_args::expand_state_def_impl(
-                        def.vis.clone(),
+                        &def.vis,
                         state_name.clone(),
                         enum_name.to_token_stream(),
                         &variant.fields.fields,
@@ -125,7 +134,7 @@ fn expand_impl(def: SubcommandDef) -> syn::Result<SubcommandImpl> {
     })
 }
 
-impl ToTokens for SubcommandImpl {
+impl ToTokens for SubcommandImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self {
             enum_name,
