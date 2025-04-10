@@ -76,7 +76,7 @@ pub mod __private {
             .ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?)
     }
 
-    pub fn invalid_value<T>(s: &str) -> Result<T> {
+    pub fn invalid_value<T>(s: impl Into<OsString>) -> Result<T> {
         Err(ErrorKind::InvalidValue(s.into(), "TODO: unknown variant".into()).into())
     }
 }

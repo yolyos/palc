@@ -1,47 +1,45 @@
-use darling::{FromDeriveInput, FromVariant};
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
-use syn::{DeriveInput, Ident};
+use syn::{DeriveInput, Generics, Ident};
 
 use crate::common::wrap_anon_item;
 
 pub(crate) fn expand(input: DeriveInput) -> TokenStream {
-    let mut tts = match ValueEnumDef::from_derive_input(&input) {
-        Ok(def) => match expand_impl(def) {
-            Ok(tts) => return wrap_anon_item(tts),
-            Err(err) => err.to_compile_error(),
-        },
-        Err(err) => err.write_errors(),
+    let mut tts = match expand_impl(&input) {
+        Ok(tts) => return wrap_anon_item(tts),
+        Err(err) => err.to_compile_error(),
     };
 
     tts.extend(wrap_anon_item(ValueEnumImpl {
-        ident: input.ident,
+        ident: &input.ident,
+        generics: &input.generics,
         variants: Vec::new(),
     }));
     tts
 }
 
-#[derive(FromDeriveInput)]
-#[darling(supports(enum_unit))]
-struct ValueEnumDef {
-    ident: Ident,
-    data: darling::ast::Data<ValueEnumVariant, ()>,
-}
+fn expand_impl(def: &DeriveInput) -> syn::Result<ValueEnumImpl<'_>> {
+    let syn::Data::Enum(enum_def) = &def.data else {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            "derive(ValueEnum) can only be used on enums",
+        ));
+    };
 
-#[derive(FromVariant)]
-struct ValueEnumVariant {
-    ident: Ident,
-}
-
-fn expand_impl(def: ValueEnumDef) -> syn::Result<ValueEnumImpl> {
-    let variants = def.data.take_enum().expect("validated by darling");
-    let mut variants = variants
-        .into_iter()
+    let mut variants = enum_def
+        .variants
+        .iter()
         .map(|variant| {
+            if !matches!(variant.fields, syn::Fields::Unit) {
+                return Err(syn::Error::new(
+                    variant.ident.span(),
+                    "only unit variant is supported",
+                ));
+            }
             let arg_name = heck::AsKebabCase(variant.ident.to_string()).to_string();
-            (arg_name, variant.ident)
+            Ok((arg_name, &variant.ident))
         })
-        .collect::<Vec<_>>();
+        .collect::<syn::Result<Vec<_>>>()?;
 
     variants.sort_by(|lhs, rhs| Ord::cmp(&lhs.0, &rhs.0));
     if let Some(w) = variants.windows(2).find(|w| w[0].0 == w[1].0) {
@@ -51,26 +49,40 @@ fn expand_impl(def: ValueEnumDef) -> syn::Result<ValueEnumImpl> {
     }
 
     Ok(ValueEnumImpl {
-        ident: def.ident,
+        ident: &def.ident,
+        generics: &def.generics,
         variants,
     })
 }
 
-struct ValueEnumImpl {
-    ident: Ident,
-    variants: Vec<(String, Ident)>,
+struct ValueEnumImpl<'i> {
+    ident: &'i Ident,
+    generics: &'i Generics,
+    variants: Vec<(String, &'i Ident)>,
 }
 
-impl ToTokens for ValueEnumImpl {
+impl ToTokens for ValueEnumImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let name = &self.ident;
+        let name = self.ident;
+        let (impl_generics, ty_generics, where_clause) = self.generics.split_for_impl();
         let variant_strs = self.variants.iter().map(|(s, _)| s);
         let variant_names = self.variants.iter().map(|(_, name)| name);
+
+        if self.variants.is_empty() {
+            tokens.extend(quote! {
+                #[automatically_derived]
+                impl #impl_generics __rt::ArgValue for #name #ty_generics #where_clause {
+                    fn parse_value(__v: __rt::Cow<'_, __rt::OsStr>) -> __rt::Result<Self> {
+                        __rt::invalid_value(__v)
+                    }
+                }
+            });
+            return;
+        }
+
         tokens.extend(quote! {
             #[automatically_derived]
-            impl __rt::ArgValue for #name {
-                // If this enum has no variants.
-                #[allow(unreachable_code)]
+            impl #impl_generics __rt::ArgValue for #name #ty_generics #where_clause {
                 fn parse_value(__v: __rt::Cow<'_, __rt::OsStr>) -> __rt::Result<Self> {
                     __rt::Ok(match __rt::str_from_utf8(&__v)? {
                         #(#variant_strs => #name :: #variant_names,)*
