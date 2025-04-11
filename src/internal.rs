@@ -20,11 +20,13 @@ pub trait ArgPlace {
 }
 
 /// The expected number of values for a named argument to take.
+#[derive(Debug, Clone, Copy)]
 pub enum NumValues {
     Zero,
     One { require_equals: bool },
 }
 
+#[inline(always)]
 pub fn place_for_flag<'a>() -> &'a mut dyn ArgPlace {
     struct FlagPlace;
     impl ArgPlace for FlagPlace {
@@ -38,7 +40,9 @@ pub fn place_for_flag<'a>() -> &'a mut dyn ArgPlace {
 
     // This does no allocation but only initialize it as a dangling reference.
     // From: <https://github.com/rust-lang/rust/issues/103821#issuecomment-1304004618>
-    Box::leak(Box::new(FlagPlace))
+    let b = Box::leak(Box::new(FlagPlace));
+    debug_assert_eq!(std::ptr::from_ref(b), std::ptr::dangling());
+    b
 }
 
 pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
@@ -231,12 +235,14 @@ pub struct ArgsIter<'a> {
     state: ArgsState,
 }
 
+#[derive(Debug)]
 enum ArgsState {
     Unnamed,
     Long { eq_pos: Option<NonZero<usize>> },
     Short { next_pos: usize },
 }
 
+#[derive(Debug)]
 enum Arg<'a> {
     DashDash,
     Named(&'a str),

@@ -21,6 +21,7 @@ mod sealed {
 pub trait ArgValueInfo<T>: 'static + Sized + sealed::Sealed {
     fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T>;
 
+    #[inline]
     fn parse(self, v: Cow<'_, OsStr>) -> Result<T> {
         Self::parser()(v)
     }

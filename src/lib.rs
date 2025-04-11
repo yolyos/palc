@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -23,7 +22,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[doc(hidden)]
 pub mod __private {
     pub use std::borrow::Cow;
-    pub use std::convert::Infallible;
+    use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
     pub use std::unimplemented;
     pub use {Default, Err, Iterator, None, Ok, Option, Some, Vec, char, str, usize};
@@ -67,17 +66,9 @@ pub mod __private {
         Err(ErrorKind::MissingRequiredSubcommand.into())
     }
 
+    #[inline]
     pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
         Cow::Owned(std::mem::take(s))
-    }
-
-    pub fn str_from_utf8(s: &OsStr) -> Result<&str> {
-        Ok(s.to_str()
-            .ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?)
-    }
-
-    pub fn invalid_value<T>(s: impl Into<OsString>) -> Result<T> {
-        Err(ErrorKind::InvalidValue(s.into(), "TODO: unknown variant".into()).into())
     }
 }
 
@@ -118,10 +109,3 @@ pub trait Args: Sized + 'static + ArgsInternal {}
 
 /// A subcommand enum.
 pub trait Subcommand: Sized + 'static + CommandInternal {}
-
-impl Subcommand for Infallible {}
-impl CommandInternal for Infallible {
-    fn try_parse_with_name(name: &str, _args: &mut ArgsIter<'_>) -> Result<Self> {
-        Err(ErrorKind::UnexpectedUnnamedArgument(name.into()).into())
-    }
-}
