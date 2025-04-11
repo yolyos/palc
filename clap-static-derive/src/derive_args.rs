@@ -587,6 +587,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
         let ParserStateDefImpl {
             named_fields,
             unnamed_fields,
+            catchall_field,
             last_field,
             flatten_fields,
             ..
@@ -605,7 +606,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                     .filter(|s| !s.starts_with("--"))
                     .map(|s| format!("-{s}"));
                 quote! {
-                    __rt::refl::NamedArgInfo::new(
+                    __rt::refl::NamedArgInfo::__new(
                         &[#(#long_names),*],
                         &[#(#short_names),*],
                         #value_display,
@@ -617,12 +618,31 @@ impl ToTokens for ArgsInfoLiteral<'_> {
         let unnamed_args = unnamed_fields
             .iter()
             .map(|FieldInfo { value_display, .. }| {
-                quote! { __rt::refl::UnnamedArgInfo::new(#value_display) }
+                quote! { __rt::refl::UnnamedArgInfo::__new(#value_display) }
             });
-        // TODO: catchall_field
+        let mut trailing_var_arg = quote! { __rt::None };
+        let mut subcmd = trailing_var_arg.clone();
+        match catchall_field {
+            None => {}
+            Some(CatchallFieldInfo::Subcommand {
+                effective_ty,
+                optional,
+                ..
+            }) => {
+                subcmd = quote! {
+                    Some((#optional, <#effective_ty as __rt::CommandInternal>::COMMAND_INFO))
+                };
+            }
+            Some(CatchallFieldInfo::VecLike { greedy, field }) => {
+                let value_display = &field.value_display;
+                trailing_var_arg = quote! {
+                    Some((#greedy, __rt::refl::UnnamedArgInfo::__new(#value_display)))
+                }
+            }
+        };
         let last_arg = match last_field {
             Some(FieldInfo { value_display, .. }) => quote! {
-                __rt::Some(__rt::refl::UnnamedArgInfo::new(#value_display))
+                __rt::Some(__rt::refl::UnnamedArgInfo::__new(#value_display))
             },
             None => quote! { __rt::None },
         };
@@ -630,13 +650,15 @@ impl ToTokens for ArgsInfoLiteral<'_> {
             flatten_fields
                 .iter()
                 .map(|FlattenFieldInfo { effective_ty, .. }| {
-                    quote! { &<#effective_ty as __rt::ArgsInternal>::__State::ARGS_INFO }
+                    quote! { &<<#effective_ty as __rt::ArgsInternal>::__State as __rt::ParserState>::ARGS_INFO }
                 });
 
         tokens.extend(quote! {
-            __rt::refl::ArgsInfo::new(
+            __rt::refl::ArgsInfo::__new(
                 &[#(#named_args),*],
                 &[#(#unnamed_args),*],
+                #trailing_var_arg,
+                #subcmd,
                 #last_arg,
                 &[#(#flatten_args),*],
             )

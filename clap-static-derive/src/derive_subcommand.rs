@@ -29,6 +29,7 @@ pub(crate) fn expand(input: DeriveInput) -> TokenStream {
     tts.extend(wrap_anon_item(quote! {
         impl __rt::Subcommand for #name {}
         impl __rt::CommandInternal for #name {
+            const COMMAND_INFO: __rt::CommandInfo = __rt::CommandInfo::__new(&[]);
             fn try_parse_with_name(
                 __name: &__rt::str,
                 __args: &mut __rt::ArgsIter<'_>,
@@ -143,12 +144,15 @@ impl ToTokens for SubcommandImpl<'_> {
         } = self;
         let name_strs = variants.iter().map(|(arg_name, _)| arg_name);
         let cases = variants.iter().map(|(_, e)| e);
+        let command_info_lit = CommandInfoLiteral(self);
 
         tokens.extend(quote! {
             #(#state_defs)*
 
             impl __rt::Subcommand for #enum_name {}
             impl __rt::CommandInternal for #enum_name {
+                const COMMAND_INFO: __rt::CommandInfo = #command_info_lit;
+
                 fn try_parse_with_name(
                     __name: &__rt::str,
                     __args: &mut __rt::ArgsIter<'_>,
@@ -159,6 +163,30 @@ impl ToTokens for SubcommandImpl<'_> {
                     }
                 }
             }
+        });
+    }
+}
+
+struct CommandInfoLiteral<'i>(&'i SubcommandImpl<'i>);
+
+impl ToTokens for CommandInfoLiteral<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let SubcommandImpl { variants, .. } = self.0;
+        let subcmd_names = variants.iter().map(|(s, _)| s);
+        let subargs = variants.iter().map(|(_, variant)| match variant {
+            VariantImpl::Unit { .. } => quote! { __rt::ArgsInfo::empty() },
+            VariantImpl::Tuple { ty, .. } => {
+                quote! { <<#ty as __rt::ArgsInternal>::__State as __rt::ParserState>::ARGS_INFO }
+            }
+            VariantImpl::Struct { state_name } => {
+                quote! { <#state_name as __rt::ParserState>::ARGS_INFO }
+            }
+        });
+
+        tokens.extend(quote! {
+            __rt::CommandInfo::__new(&[
+                #((__rt::Some(#subcmd_names), &#subargs)),*
+            ])
         });
     }
 }

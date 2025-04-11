@@ -39,7 +39,7 @@ pub mod __private {
         ParserStateDyn, place_for_flag, place_for_set_value, place_for_subcommand,
         place_for_trailing_var_arg, place_for_vec, try_parse_args, try_parse_with_state,
     };
-    pub use crate::refl::{self, ArgsInfo};
+    pub use crate::refl::{self, ArgsInfo, CommandInfo};
     pub use crate::{Args, Parser, Result, Subcommand};
 
     /// The fallback state type for graceful failing from proc-macro.

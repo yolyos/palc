@@ -3,16 +3,23 @@ pub struct ArgsInfo {
     direct_named_args: &'static [NamedArgInfo],
     direct_unnamed_args: &'static [UnnamedArgInfo],
     last_arg: Option<UnnamedArgInfo>,
+    // (greedy, arg)
+    trailing_var_arg: Option<(bool, UnnamedArgInfo)>,
+    // (optional, subcommand)
+    subcommand: Option<(bool, CommandInfo)>,
     flatten_args: &'static [&'static ArgsInfo],
     total_named_arg_cnt: usize,
     total_unnamed_arg_cnt: usize,
 }
 
 impl ArgsInfo {
+    // NB. Used by proc-macro.
     #[doc(hidden)]
-    pub const fn new(
+    pub const fn __new(
         direct_named_args: &'static [NamedArgInfo],
         direct_unnamed_args: &'static [UnnamedArgInfo],
+        mut trailing_var_arg: Option<(bool, UnnamedArgInfo)>,
+        mut subcommand: Option<(bool, CommandInfo)>,
         mut last_arg: Option<UnnamedArgInfo>,
         flatten_args: &'static [&'static ArgsInfo],
     ) -> Self {
@@ -24,16 +31,35 @@ impl ArgsInfo {
             total_named_arg_cnt += flatten.total_named_arg_cnt;
             total_unnamed_arg_cnt += flatten.total_unnamed_arg_cnt;
             if let Some(last) = flatten.last_arg {
-                if last_arg.replace(last).is_some() {
-                    panic!("Args and command(flatten) Args cannot both have arg(last)");
-                }
+                assert!(
+                    last_arg.replace(last).is_none(),
+                    "duplicated arg(last) from command(flatten) Args",
+                );
+            }
+            if let Some(vaarg) = flatten.trailing_var_arg {
+                assert!(
+                    trailing_var_arg.replace(vaarg).is_none(),
+                    "duplicated variable-length positional arguments from command(flatten) Args",
+                );
+            }
+            if let Some(subcmd) = flatten.subcommand {
+                assert!(
+                    subcommand.replace(subcmd).is_none(),
+                    "duplicated subcommand from command(flatten) Args",
+                );
             }
             i += 1;
         }
+        assert!(
+            trailing_var_arg.is_some() as u8 + subcommand.is_some() as u8 <= 1,
+            "variable-length positional arguments conflicts with subcommands",
+        );
 
         Self {
             direct_named_args,
             direct_unnamed_args,
+            trailing_var_arg,
+            subcommand,
             last_arg,
             flatten_args,
             total_named_arg_cnt,
@@ -43,10 +69,13 @@ impl ArgsInfo {
 }
 
 impl ArgsInfo {
-    pub(crate) const fn empty() -> Self {
+    // NB. Used by proc-macro.
+    pub const fn empty() -> Self {
         Self {
             direct_named_args: &[],
             direct_unnamed_args: &[],
+            trailing_var_arg: None,
+            subcommand: None,
             last_arg: None,
             flatten_args: &[],
             total_named_arg_cnt: 0,
@@ -64,8 +93,9 @@ pub struct NamedArgInfo {
 }
 
 impl NamedArgInfo {
+    // NB. Used by proc-macro.
     #[doc(hidden)]
-    pub const fn new(
+    pub const fn __new(
         long_names: &'static [&'static str],
         short_names: &'static [&'static str],
         value_display: &'static str,
@@ -86,8 +116,22 @@ pub struct UnnamedArgInfo {
 }
 
 impl UnnamedArgInfo {
+    // NB. Used by proc-macro.
     #[doc(hidden)]
-    pub const fn new(value_display: &'static str) -> Self {
+    pub const fn __new(value_display: &'static str) -> Self {
         Self { value_display }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CommandInfo {
+    commands: &'static [(Option<&'static str>, &'static ArgsInfo)],
+}
+
+impl CommandInfo {
+    // NB. Used by proc-macro.
+    #[doc(hidden)]
+    pub const fn __new(commands: &'static [(Option<&'static str>, &'static ArgsInfo)]) -> Self {
+        Self { commands }
     }
 }

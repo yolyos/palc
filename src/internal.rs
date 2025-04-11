@@ -8,7 +8,7 @@ use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
 
 use crate::error::ErrorKind;
-use crate::refl::ArgsInfo;
+use crate::refl::{ArgsInfo, CommandInfo};
 use crate::values::ArgValueInfo;
 use crate::{Args, Result, Subcommand};
 
@@ -177,11 +177,15 @@ pub trait ParserStateDyn: 'static {
 }
 
 pub trait CommandInternal: Sized {
+    const COMMAND_INFO: CommandInfo;
+
     fn try_parse_with_name(name: &str, args: &mut ArgsIter<'_>) -> Result<Self>;
 }
 
 /// A common program-name-agnostic command.
 impl<A: Args> CommandInternal for A {
+    const COMMAND_INFO: CommandInfo = CommandInfo::__new(&[(None, &A::__State::ARGS_INFO)]);
+
     fn try_parse_with_name(_name: &str, args: &mut ArgsIter<'_>) -> Result<Self> {
         try_parse_args(args)
     }
