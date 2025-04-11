@@ -386,18 +386,19 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 let arg_names = &f.arg_names;
                 let require_eq = f.require_eq;
                 let value_info = f.value_info();
+                let span = f.effective_ty.span();
                 let action = match f.kind {
                     FieldKind::BoolSetTrue => {
                         quote! {{ self.#name = true; __rt::place_for_flag() }}
                     }
                     FieldKind::Option | FieldKind::UnwrapOption => {
-                        quote! { __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#name, #value_info) }
+                        quote_spanned! {span=> __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#name, #value_info) }
                     }
                     FieldKind::Vec => {
-                        quote! { __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
+                        quote_spanned! {span=> __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
                     }
                     FieldKind::OptionVec => {
-                        quote! { __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
+                        quote_spanned! {span=> __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
                     }
                     // Handle later.
                     FieldKind::Flatten => TokenStream::new(),
@@ -438,15 +439,19 @@ impl ToTokens for ParserStateDefImpl<'_> {
             }
             let name = f.name;
             let value_info = f.value_info();
+            let span = f.effective_ty.span();
+            let parsed = quote_spanned! {span=>
+                __rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?
+            };
             match f.kind {
                 FieldKind::BoolSetTrue => unreachable!(),
                 FieldKind::Option | FieldKind::UnwrapOption => Some(quote! {
                     if self.#name.is_none() {
-                        self.#name = __rt::Some(__rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?);
+                        self.#name = __rt::Some(#parsed);
                         return __rt::Ok(__rt::None);
                     }
                 }),
-                FieldKind::Flatten => Some(quote! {
+                FieldKind::Flatten => Some(quote_spanned! {span=>
                     match __rt::ParserStateDyn::feed_unnamed(&mut self.#name, __arg, __is_last) {
                         __rt::Err(__rt::None) => {},
                         __ret => return __ret
@@ -455,15 +460,15 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 // Tail arguments.
                 // FIXME: trailing_var_arg
                 FieldKind::Vec => Some(quote! {
-                    self.#name.push(__rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?);
+                    self.#name.push(#parsed);
                     __rt::Ok(__rt::None)
                 }),
                 FieldKind::OptionVec => Some(quote! {
-                    self.#name.get_or_insert_default().push(__rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?);
+                    self.#name.get_or_insert_default().push(#parsed);
                     __rt::Ok(__rt::None)
                 }),
                 FieldKind::OptionSubcommand |
-                FieldKind::UnwrapSubcommand => Some(quote! {
+                FieldKind::UnwrapSubcommand => Some(quote_spanned! {span=>
                     __rt::place_for_subcommand(&mut self.#name)
                 }),
             }

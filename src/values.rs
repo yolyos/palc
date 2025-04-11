@@ -7,7 +7,18 @@ use std::str::FromStr;
 
 use crate::{ErrorKind, Result};
 
-pub trait ArgValueInfo<T>: 'static + Sized {
+mod sealed {
+    pub trait Sealed {}
+}
+
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be parsed into a clap_static argument value",
+    label = "Unparseable type",
+    note = "for enum types, try `derive(clap_static::ValueEnum)` on it",
+    note = "or you can implement either `From<OsString>`, `From<String>` or `FromStr` for it \
+    to make it parseable"
+)]
+pub trait ArgValueInfo<T>: 'static + Sized + sealed::Sealed {
     fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T>;
 
     fn parse(self, v: Cow<'_, OsStr>) -> Result<T> {
@@ -39,6 +50,7 @@ impl<T, Fuel> Deref for InferValueParser<T, &Fuel> {
 impl<T: ValueEnum> InferValueParser<T, &&&&()> {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
+        impl sealed::Sealed for Info {}
         impl<T: ValueEnum> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
                 |v| {
@@ -59,6 +71,7 @@ impl<T: ValueEnum> InferValueParser<T, &&&&()> {
 impl<T: From<OsString>> InferValueParser<T, &&&()> {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
+        impl sealed::Sealed for Info {}
         impl<T: From<OsString>> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
                 |v| Ok(v.into_owned().into())
@@ -71,6 +84,7 @@ impl<T: From<OsString>> InferValueParser<T, &&&()> {
 impl<T: From<String>> InferValueParser<T, &&()> {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
+        impl sealed::Sealed for Info {}
         impl<T: From<String>> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
                 |v| {
@@ -88,6 +102,7 @@ impl<T: From<String>> InferValueParser<T, &&()> {
 impl<T: FromStr<Err: fmt::Display>> InferValueParser<T, &()> {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
+        impl sealed::Sealed for Info {}
         impl<T: FromStr<Err: fmt::Display>> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
                 |v| {
@@ -102,13 +117,12 @@ impl<T: FromStr<Err: fmt::Display>> InferValueParser<T, &()> {
     }
 }
 
-/// A placeholder struct to emit errors if a type is cannot be parsed.
-#[expect(non_camel_case_types, reason = "for error display")]
-pub struct Error__ThisTypeIsNotParseable<T>(PhantomData<T>);
-
+// For error reporting.
+// Since `ArgValueInfo` is sealed and all implementations are private, this user type is guaranteed
+// to cause an unimplemented error on `ArgValueInfo`.
 impl<T> InferValueParser<T, ()> {
-    pub fn get(&self) -> Error__ThisTypeIsNotParseable<T> {
-        Error__ThisTypeIsNotParseable(PhantomData)
+    pub fn get(&self) -> T {
+        unreachable!()
     }
 }
 
@@ -123,5 +137,7 @@ fn native_impls() {
     has_parser::<String>(arg_value_info!(String));
     has_parser::<usize>(arg_value_info!(usize));
 
-    let _: Error__ThisTypeIsNotParseable<()> = arg_value_info!(());
+    let _ = || {
+        let () = arg_value_info!(());
+    };
 }
