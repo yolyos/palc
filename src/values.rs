@@ -7,19 +7,23 @@ use std::str::FromStr;
 
 use crate::{ErrorKind, Result};
 
-pub struct ArgValueInfo<P> {
-    pub parser: P, // impl Fn(Cow<'_, OsStr>) -> Result<T>
+pub trait ArgValueInfo<T>: 'static + Sized {
+    fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T>;
+
+    fn parse(self, v: Cow<'_, OsStr>) -> Result<T> {
+        Self::parser()(v)
+    }
 }
 
-pub trait ArgValue: Sized + 'static {
-    fn parse_value(value: Cow<'_, OsStr>) -> Result<Self>;
+pub trait ValueEnum: Sized {
+    fn parse_value(s: &str) -> Option<Self>;
 }
 
 #[macro_export]
 #[doc(hidden)]
 macro_rules! arg_value_info {
     ($ty:ty) => {
-        ($crate::__private::InferValueParser::<$ty, &&&&()>($crate::__private::PhantomData).get())
+        $crate::__private::InferValueParser::<$ty, &&&&()>($crate::__private::PhantomData).get()
     };
 }
 
@@ -32,49 +36,69 @@ impl<T, Fuel> Deref for InferValueParser<T, &Fuel> {
     }
 }
 
-impl<T: ArgValue> InferValueParser<T, &&&&()> {
-    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
-        ArgValueInfo {
-            parser: T::parse_value,
+impl<T: ValueEnum> InferValueParser<T, &&&&()> {
+    pub fn get(&self) -> impl ArgValueInfo<T> {
+        struct Info;
+        impl<T: ValueEnum> ArgValueInfo<T> for Info {
+            fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
+                |v| {
+                    let s = v
+                        .to_str()
+                        .ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?;
+                    // TODO: better diagnostics?
+                    Ok(T::parse_value(s).ok_or_else(|| {
+                        ErrorKind::InvalidValue(s.into(), "unknown variant".into())
+                    })?)
+                }
+            }
         }
+        Info
     }
 }
 
 impl<T: From<OsString>> InferValueParser<T, &&&()> {
-    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
-        ArgValueInfo {
-            parser: |v: Cow<'_, OsStr>| Ok(v.into_owned().into()),
+    pub fn get(&self) -> impl ArgValueInfo<T> {
+        struct Info;
+        impl<T: From<OsString>> ArgValueInfo<T> for Info {
+            fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
+                |v| Ok(v.into_owned().into())
+            }
         }
+        Info
     }
 }
 
 impl<T: From<String>> InferValueParser<T, &&()> {
-    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
-        ArgValueInfo {
-            parser: |v: Cow<'_, OsStr>| {
-                let s = v
-                    .into_owned()
-                    .into_string()
-                    .map_err(ErrorKind::InvalidUtf8)?;
-                Ok(s.into())
-            },
+    pub fn get(&self) -> impl ArgValueInfo<T> {
+        struct Info;
+        impl<T: From<String>> ArgValueInfo<T> for Info {
+            fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
+                |v| {
+                    Ok(v.into_owned()
+                        .into_string()
+                        .map_err(ErrorKind::InvalidUtf8)?
+                        .into())
+                }
+            }
         }
+        Info
     }
 }
 
 impl<T: FromStr<Err: fmt::Display>> InferValueParser<T, &()> {
-    pub fn get(&self) -> ArgValueInfo<impl Fn(Cow<'_, OsStr>) -> Result<T>> {
-        ArgValueInfo {
-            parser: |v: Cow<'_, OsStr>| {
-                let s = v
-                    .to_str()
-                    .ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?;
-                let v = s
-                    .parse::<T>()
-                    .map_err(|err| ErrorKind::InvalidValue(s.into(), err.to_string()))?;
-                Ok(v)
-            },
+    pub fn get(&self) -> impl ArgValueInfo<T> {
+        struct Info;
+        impl<T: FromStr<Err: fmt::Display>> ArgValueInfo<T> for Info {
+            fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
+                |v| {
+                    Ok(v.to_str()
+                        .ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?
+                        .parse::<T>()
+                        .map_err(|err| ErrorKind::InvalidValue(v.into(), err.to_string()))?)
+                }
+            }
         }
+        Info
     }
 }
 
@@ -90,13 +114,14 @@ impl<T> InferValueParser<T, ()> {
 
 #[test]
 fn native_impls() {
-    let _f = arg_value_info!(OsString).parser;
-    let _f = arg_value_info!(std::path::PathBuf).parser;
-    let _f = arg_value_info!(String).parser;
-    let _f = arg_value_info!(usize).parser;
-}
+    use std::path::PathBuf;
 
-/// ```compile_fail
-/// let _f = clap_static::arg_value_info!(()).parser;
-/// ```
-fn _not_implemented() {}
+    fn has_parser<T>(_: impl ArgValueInfo<T>) {}
+
+    has_parser::<OsString>(arg_value_info!(OsString));
+    has_parser::<PathBuf>(arg_value_info!(PathBuf));
+    has_parser::<String>(arg_value_info!(String));
+    has_parser::<usize>(arg_value_info!(usize));
+
+    let _: Error__ThisTypeIsNotParseable<()> = arg_value_info!(());
+}

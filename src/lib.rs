@@ -30,7 +30,7 @@ pub mod __private {
 
     // Used by `arg_value_info!`
     pub use crate::arg_value_info;
-    pub use crate::values::{ArgValue, ArgValueInfo, InferValueParser};
+    pub use crate::values::{ArgValueInfo, InferValueParser, ValueEnum};
     pub use std::marker::PhantomData;
 
     use crate::ErrorKind;

@@ -1,10 +1,13 @@
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
+use std::marker::PhantomData;
 use std::num::NonZero;
 
 use os_str_bytes::OsStrBytesExt;
+use ref_cast::RefCast;
 
 use crate::error::ErrorKind;
+use crate::values::ArgValueInfo;
 use crate::{Args, Result, Subcommand};
 
 use super::Error;
@@ -38,20 +41,15 @@ pub fn place_for_flag<'a>() -> &'a mut dyn ArgPlace {
     Box::leak(Box::new(FlagPlace))
 }
 
-pub fn place_for_vec<T, F, const REQUIRE_EQ: bool>(
+pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
     place: &mut Vec<T>,
-    _f: F,
-) -> &'_ mut dyn ArgPlace
-where
-    F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
-{
-    #[repr(C)]
-    struct Place<T, F, const REQUIRE_EQ: bool>(Vec<T>, F);
+    _: A,
+) -> &'_ mut dyn ArgPlace {
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    struct Place<T, A, const REQUIRE_EQ: bool>(Vec<T>, PhantomData<A>);
 
-    impl<T, F, const REQUIRE_EQ: bool> ArgPlace for Place<T, F, REQUIRE_EQ>
-    where
-        F: Fn(Cow<'_, OsStr>) -> Result<T>,
-    {
+    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool> ArgPlace for Place<T, A, REQUIRE_EQ> {
         fn num_values(&self) -> NumValues {
             NumValues::One {
                 require_equals: REQUIRE_EQ,
@@ -59,30 +57,23 @@ where
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
-            self.0.push((self.1)(value)?);
+            self.0.push(A::parser()(value)?);
             Ok(())
         }
     }
 
-    assert_eq!(size_of::<F>(), 0);
-    assert_eq!(align_of::<F>(), 1);
-    unsafe { &mut *(place as *mut Vec<T> as *mut Place<T, F, REQUIRE_EQ>) }
+    Place::<T, A, REQUIRE_EQ>::ref_cast_mut(place)
 }
 
-pub fn place_for_set_value<T, F, const REQUIRE_EQ: bool>(
+pub fn place_for_set_value<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
     place: &mut Option<T>,
-    _f: F,
-) -> &'_ mut dyn ArgPlace
-where
-    F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
-{
-    #[repr(C)]
-    struct Place<T, F, const REQUIRE_EQ: bool>(Option<T>, F);
+    _: A,
+) -> &'_ mut dyn ArgPlace {
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    struct Place<T, A, const REQUIRE_EQ: bool>(Option<T>, PhantomData<A>);
 
-    impl<T, F, const REQUIRE_EQ: bool> ArgPlace for Place<T, F, REQUIRE_EQ>
-    where
-        F: Fn(Cow<'_, OsStr>) -> Result<T>,
-    {
+    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool> ArgPlace for Place<T, A, REQUIRE_EQ> {
         fn num_values(&self) -> NumValues {
             NumValues::One {
                 require_equals: REQUIRE_EQ,
@@ -90,14 +81,12 @@ where
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
-            self.0 = Some((self.1)(value)?);
+            self.0 = Some(A::parser()(value)?);
             Ok(())
         }
     }
 
-    assert_eq!(size_of::<F>(), 0);
-    assert_eq!(align_of::<F>(), 1);
-    unsafe { &mut *(place as *mut Option<T> as *mut Place<T, F, REQUIRE_EQ>) }
+    Place::<T, A, REQUIRE_EQ>::ref_cast_mut(place)
 }
 
 /// A greedy unnamed argument with its place attached as `&mut self`.
@@ -108,36 +97,34 @@ pub trait GreedyArgsPlace {
     fn feed_greedy(&mut self, arg: OsString, _args: &mut ArgsIter<'_>) -> Result<()>;
 }
 
-pub fn place_for_trailing_var_arg<T, F>(place: &mut Vec<T>, _f: F) -> FeedUnnamed<'_>
-where
-    F: Fn(Cow<'_, OsStr>) -> Result<T> + 'static,
-{
-    #[repr(C)]
-    struct Place<T, F>(Vec<T>, F);
+pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
+    place: &mut Vec<T>,
+    _: A,
+) -> FeedUnnamed<'_> {
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    struct Place<T, A>(Vec<T>, PhantomData<A>);
 
-    impl<T, F> GreedyArgsPlace for Place<T, F>
-    where
-        F: Fn(Cow<'_, OsStr>) -> Result<T>,
-    {
-        fn feed_greedy(&mut self, arg: OsString, args: &mut ArgsIter<'_>) -> Result<()> {
-            self.0.push((self.1)(Cow::Owned(arg))?);
+    impl<T, A: ArgValueInfo<T>> GreedyArgsPlace for Place<T, A> {
+        fn feed_greedy(&mut self, mut arg: OsString, args: &mut ArgsIter<'_>) -> Result<()> {
             if let Some(high) = args.iter.size_hint().1 {
-                self.0.reserve(high);
+                self.0.reserve(1 + high);
             }
-            for s in &mut *args.iter {
-                self.0.push((self.1)(Cow::Owned(s))?);
+            loop {
+                self.0.push(A::parser()(Cow::Owned(arg))?);
+                arg = match args.iter.next() {
+                    Some(arg) => arg,
+                    None => return Ok(()),
+                };
             }
-            Ok(())
         }
     }
 
-    assert_eq!(size_of::<F>(), 0);
-    assert_eq!(align_of::<F>(), 1);
-    let place = unsafe { &mut *(place as *mut Vec<T> as *mut Place<T, F>) };
-    Ok(Some(place))
+    Ok(Some(Place::<T, A>::ref_cast_mut(place)))
 }
 
 pub fn place_for_subcommand<C: Subcommand>(place: &mut Option<C>) -> FeedUnnamed<'_> {
+    #[derive(RefCast)]
     #[repr(transparent)]
     struct Place<C>(Option<C>);
 
@@ -151,8 +138,7 @@ pub fn place_for_subcommand<C: Subcommand>(place: &mut Option<C>) -> FeedUnnamed
         }
     }
 
-    let place = unsafe { &mut *(place as *mut Option<C> as *mut Place<C>) };
-    Ok(Some(place))
+    Ok(Some(Place::<C>::ref_cast_mut(place)))
 }
 
 pub type FeedNamed<'s> = Option<&'s mut dyn ArgPlace>;

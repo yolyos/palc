@@ -71,9 +71,9 @@ impl ToTokens for ValueEnumImpl<'_> {
         if self.variants.is_empty() {
             tokens.extend(quote! {
                 #[automatically_derived]
-                impl #impl_generics __rt::ArgValue for #name #ty_generics #where_clause {
-                    fn parse_value(__v: __rt::Cow<'_, __rt::OsStr>) -> __rt::Result<Self> {
-                        __rt::invalid_value(__v)
+                impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {
+                    fn parse_value(_: &__rt::str) -> __rt::Option<Self> {
+                        __rt::None
                     }
                 }
             });
@@ -82,11 +82,11 @@ impl ToTokens for ValueEnumImpl<'_> {
 
         tokens.extend(quote! {
             #[automatically_derived]
-            impl #impl_generics __rt::ArgValue for #name #ty_generics #where_clause {
-                fn parse_value(__v: __rt::Cow<'_, __rt::OsStr>) -> __rt::Result<Self> {
-                    __rt::Ok(match __rt::str_from_utf8(&__v)? {
-                        #(#variant_strs => #name :: #variant_names,)*
-                        __s => return __rt::invalid_value(__s)
+            impl #impl_generics __rt::ValueEnum for #name #ty_generics #where_clause {
+                fn parse_value(__v: &__rt::str) -> __rt::Option<Self> {
+                    __rt::Some(match __v {
+                        #(#variant_strs => Self:: #variant_names,)*
+                        _ => return __rt::None
                     })
                 }
             }

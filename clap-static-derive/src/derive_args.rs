@@ -125,9 +125,9 @@ impl FieldInfo<'_> {
             .unwrap_or(&self.value_display)
     }
 
-    fn parser_func(&self) -> TokenStream {
+    fn value_info(&self) -> TokenStream {
         let ty = self.effective_ty;
-        quote_spanned! {ty.span()=> (__rt::arg_value_info!(#ty).parser) }
+        quote_spanned! {ty.span()=> __rt::arg_value_info!(#ty) }
     }
 }
 
@@ -385,19 +385,19 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 let name = f.name;
                 let arg_names = &f.arg_names;
                 let require_eq = f.require_eq;
-                let parser = f.parser_func();
+                let value_info = f.value_info();
                 let action = match f.kind {
                     FieldKind::BoolSetTrue => {
                         quote! {{ self.#name = true; __rt::place_for_flag() }}
                     }
                     FieldKind::Option | FieldKind::UnwrapOption => {
-                        quote! { __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#name, #parser) }
+                        quote! { __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#name, #value_info) }
                     }
                     FieldKind::Vec => {
-                        quote! { __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #parser)  }
+                        quote! { __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
                     }
                     FieldKind::OptionVec => {
-                        quote! { __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #parser)  }
+                        quote! { __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
                     }
                     // Handle later.
                     FieldKind::Flatten => TokenStream::new(),
@@ -437,12 +437,12 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 return None;
             }
             let name = f.name;
-            let parser = f.parser_func();
+            let value_info = f.value_info();
             match f.kind {
                 FieldKind::BoolSetTrue => unreachable!(),
                 FieldKind::Option | FieldKind::UnwrapOption => Some(quote! {
                     if self.#name.is_none() {
-                        self.#name = __rt::Some(#parser(__rt::take_arg(__arg))?);
+                        self.#name = __rt::Some(__rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?);
                         return __rt::Ok(__rt::None);
                     }
                 }),
@@ -455,11 +455,11 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 // Tail arguments.
                 // FIXME: trailing_var_arg
                 FieldKind::Vec => Some(quote! {
-                    self.#name.push(#parser(__rt::take_arg(__arg))?);
+                    self.#name.push(__rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?);
                     __rt::Ok(__rt::None)
                 }),
                 FieldKind::OptionVec => Some(quote! {
-                    self.#name.get_or_insert_default().push(#parser(__rt::take_arg(__arg))?);
+                    self.#name.get_or_insert_default().push(__rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?);
                     __rt::Ok(__rt::None)
                 }),
                 FieldKind::OptionSubcommand |
@@ -482,14 +482,14 @@ impl ToTokens for ParserStateDefImpl<'_> {
             }
             if let Some(f) = last_field {
                 let name = f.name;
-                let parser = f.parser_func();
+                let value_info = f.value_info();
                 let get_or_insert = matches!(f.kind, FieldKind::OptionVec)
                     .then(|| quote! { .get_or_insert_default() });
                 feed_unnamed_body = quote! {
                     if !__is_last {
                         #feed_unnamed_body
                     } else {
-                        __rt::place_for_trailing_var_arg(&mut self.#name #get_or_insert, #parser)
+                        __rt::place_for_trailing_var_arg(&mut self.#name #get_or_insert, #value_info)
                     }
                 };
             }
