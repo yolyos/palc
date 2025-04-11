@@ -131,6 +131,7 @@ impl FieldInfo<'_> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FieldKind {
     BoolSetTrue,
     Option,
@@ -540,6 +541,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
             })
         };
 
+        let args_info_lit = ArgsInfoLiteral { fields };
+
         tokens.extend(quote! {
             // FIXME: Visibility is still broken with `command(flatten)`.
             // Inherited visibility is needed to avoid "private type in public interface".
@@ -551,6 +554,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
             #[automatically_derived]
             impl __rt::ParserState for #state_name {
                 type Output = #output_ty;
+                const ARGS_INFO: __rt::ArgsInfo = #args_info_lit;
 
                 fn init() -> Self {
                     Self {
@@ -571,6 +575,71 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 #feed_named_func
                 #feed_unnamed_func
             }
+        });
+    }
+}
+
+/// Generates the reflection constant with type `ArgsInfo`.
+struct ArgsInfoLiteral<'a> {
+    fields: &'a [FieldInfo<'a>],
+}
+
+impl ToTokens for ArgsInfoLiteral<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Self { fields } = self;
+        let named_args = fields.iter().filter(|f| !f.arg_names.is_empty()).map(|f| {
+            let FieldInfo {
+                arg_names,
+                value_display,
+                require_eq,
+                ..
+            } = f;
+            let long_names = arg_names.iter().filter(|s| s.starts_with("--"));
+            let short_names = arg_names
+                .iter()
+                .filter(|s| !s.starts_with("--"))
+                .map(|s| format!("-{s}"));
+            quote! {
+                __rt::refl::NamedArgInfo::new(
+                    &[#(#long_names),*],
+                    &[#(#short_names),*],
+                    #value_display,
+                    #require_eq,
+                )
+            }
+        });
+        let unnamed_args = fields
+            .iter()
+            .filter(|f| f.arg_names.is_empty() && f.kind != FieldKind::Flatten && !f.is_last)
+            .map(|f| {
+                let FieldInfo { value_display, .. } = f;
+                quote! {
+                    __rt::refl::UnnamedArgInfo::new(
+                        #value_display,
+                    )
+                }
+            });
+        let last_arg = match fields.iter().find(|f| f.is_last) {
+            Some(FieldInfo { value_display, .. }) => quote! {
+                __rt::Some(__rt::refl::UnnamedArgInfo::new(#value_display))
+            },
+            None => quote! { __rt::None },
+        };
+        let flatten_args = fields
+            .iter()
+            .filter(|f| f.kind == FieldKind::Flatten)
+            .map(|f| {
+                let ty = f.effective_ty;
+                quote! { &<#ty as __rt::ArgsInternal>::__State::ARGS_INFO }
+            });
+
+        tokens.extend(quote! {
+            __rt::refl::ArgsInfo::new(
+                &[#(#named_args),*],
+                &[#(#unnamed_args),*],
+                #last_arg,
+                &[#(#flatten_args),*],
+            )
         });
     }
 }

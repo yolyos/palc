@@ -8,6 +8,7 @@ use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
 
 use crate::error::ErrorKind;
+use crate::refl::ArgsInfo;
 use crate::values::ArgValueInfo;
 use crate::{Args, Result, Subcommand};
 
@@ -159,6 +160,7 @@ pub trait ArgsInternal: Sized + 'static {
 
 pub trait ParserState: ParserStateDyn {
     type Output;
+    const ARGS_INFO: ArgsInfo;
 
     fn init() -> Self;
     fn finish(self) -> Result<Self::Output>;
