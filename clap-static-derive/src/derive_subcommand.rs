@@ -93,7 +93,7 @@ fn expand_impl(def: &SubcommandDef) -> syn::Result<SubcommandImpl<'_>> {
     let mut state_defs = Vec::with_capacity(input_variants.len());
 
     let variants = input_variants
-        .into_iter()
+        .iter()
         .map(|variant| {
             let variant_name = &variant.ident;
             let arg_name = heck::AsKebabCase(variant_name.to_string()).to_string();

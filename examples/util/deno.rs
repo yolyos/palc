@@ -204,6 +204,7 @@ struct CacheSubcommand {
 ///     and the path has no parent, take the file name of the parent path. Otherwise
 ///     settle with the generic name.
 ///   - If the resulting name has an '@...' suffix, strip it.
+///
 /// Cross compiling binaries for different platforms is not currently possible.
 #[derive(Args, Debug, Clone)]
 struct CompileSubcommand {

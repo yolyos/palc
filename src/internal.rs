@@ -287,22 +287,23 @@ impl<'a> ArgsIter<'a> {
             ArgsState::Long { eq_pos: Some(pos) } => {
                 Ok(Cow::Borrowed(self.cur_input_arg.index(pos.get() + 1..)))
             }
-            ArgsState::Short { next_pos } => {
-                let pos = if self.cur_input_arg.as_encoded_bytes().get(next_pos) == Some(&b'=') {
+            ArgsState::Short { next_pos } if next_pos < self.cur_input_arg.len() => {
+                let pos = if self.cur_input_arg.as_encoded_bytes()[next_pos] == b'=' {
                     next_pos + 1
                 } else {
                     next_pos
                 };
+                // Don't traverse the rest.
+                self.state = ArgsState::Unnamed;
                 Ok(Cow::Borrowed(self.cur_input_arg.index(pos..)))
             }
-            ArgsState::Long { eq_pos: None } => {
+            _ => {
                 let Some(arg) = self.iter.next() else {
                     let name = std::mem::take(&mut self.cur_input_arg);
                     return Err(ErrorKind::MissingValue.with_arg(name));
                 };
                 Ok(Cow::Owned(arg))
             }
-            ArgsState::Unnamed => unreachable!(),
         }
     }
 

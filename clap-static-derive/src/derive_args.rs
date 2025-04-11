@@ -120,7 +120,7 @@ impl FieldInfo<'_> {
     /// The name used for error reporting.
     fn display_name(&self) -> &str {
         self.arg_names
-            .get(0)
+            .first()
             .map(String::as_str)
             .unwrap_or(&self.value_display)
     }
@@ -143,11 +143,17 @@ enum FieldKind {
 }
 
 impl FieldKind {
-    pub fn is_trailing(&self) -> bool {
-        matches!(
-            self,
-            Self::Vec | Self::OptionVec | Self::OptionSubcommand | Self::UnwrapSubcommand
-        )
+    fn is_catchall_unnamed_arg(&self) -> bool {
+        match self {
+            FieldKind::BoolSetTrue
+            | FieldKind::Option
+            | FieldKind::UnwrapOption
+            | FieldKind::Flatten => false,
+            FieldKind::Vec
+            | FieldKind::OptionVec
+            | FieldKind::OptionSubcommand
+            | FieldKind::UnwrapSubcommand => true,
+        }
     }
 }
 
@@ -247,7 +253,7 @@ pub fn expand_state_def_impl<'i>(
                 }
 
                 out.fields.push(FieldInfo {
-                    name: &field_name,
+                    name: field_name,
                     kind,
                     effective_ty,
                     original_ty: &field.ty,
@@ -264,7 +270,7 @@ pub fn expand_state_def_impl<'i>(
                     None => (FieldKind::UnwrapSubcommand, &field.ty),
                 };
                 out.fields.push(FieldInfo {
-                    name: &field_name,
+                    name: field_name,
                     kind,
                     effective_ty,
                     original_ty: &field.ty,
@@ -276,7 +282,7 @@ pub fn expand_state_def_impl<'i>(
             }
             ArgOrCommand::Flatten => {
                 out.fields.push(FieldInfo {
-                    name: &field_name,
+                    name: field_name,
                     kind: FieldKind::Flatten,
                     effective_ty: &field.ty,
                     original_ty: &field.ty,
@@ -288,6 +294,27 @@ pub fn expand_state_def_impl<'i>(
             }
         }
     }
+
+    out.fields.sort_by_key(|f| {
+        let mut rank = 0u8;
+        // Last is last.
+        if f.is_last {
+            return 8;
+        }
+        // Named before unnamed first.
+        if f.arg_names.is_empty() {
+            rank += 4;
+        }
+        // Catchall on the tail.
+        if f.kind.is_catchall_unnamed_arg() {
+            rank += 2;
+        }
+        // Direct preceeds nested.
+        if matches!(f.kind, FieldKind::Flatten) {
+            rank += 1;
+        }
+        rank
+    });
 
     Ok(out)
 }
@@ -378,7 +405,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
         // Named argument dispatcher.
 
-        let feed_named_arms = fields
+        let mut feed_named_arms = fields
             .iter()
             .filter(|f| !f.arg_names.is_empty())
             .map(|f| {
@@ -391,15 +418,15 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     FieldKind::BoolSetTrue => {
                         quote! {{ self.#name = true; __rt::place_for_flag() }}
                     }
-                    FieldKind::Option | FieldKind::UnwrapOption => {
-                        quote_spanned! {span=> __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#name, #value_info) }
-                    }
-                    FieldKind::Vec => {
-                        quote_spanned! {span=> __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
-                    }
-                    FieldKind::OptionVec => {
-                        quote_spanned! {span=> __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)  }
-                    }
+                    FieldKind::Option | FieldKind::UnwrapOption => quote_spanned! {span=>
+                        __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#name, #value_info)
+                    },
+                    FieldKind::Vec => quote_spanned! {span=>
+                        __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)
+                    },
+                    FieldKind::OptionVec => quote_spanned! {span=>
+                        __rt::place_for_vec::<_, _, #require_eq>(self.#name.get_or_insert_default(), #value_info)
+                    },
                     // Handle later.
                     FieldKind::Flatten => TokenStream::new(),
                     FieldKind::OptionSubcommand | FieldKind::UnwrapSubcommand => unreachable!(),
@@ -418,17 +445,25 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 __rt::Some(__r)
             } else)*
         };
-        let feed_named_func =
-            (!feed_named_arms.is_empty() || !feed_named_else.is_empty()).then(|| {
+        let feed_named_func = if feed_named_arms.is_empty() && feed_named_else.is_empty() {
+            None
+        } else {
+            feed_named_arms = if feed_named_arms.is_empty() {
+                quote! { #feed_named_else { __rt::None } }
+            } else {
                 quote! {
-                    fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
-                        __rt::Some(match __name {
-                            #feed_named_arms
-                            _ => return #feed_named_else { __rt::None }
-                        })
-                    }
+                    __rt::Some(match __name {
+                        #feed_named_arms
+                        _ => return #feed_named_else { __rt::None }
+                    })
                 }
-            });
+            };
+            Some(quote! {
+                fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
+                    #feed_named_arms
+                }
+            })
+        };
 
         // Positional argument dispatcher.
 
@@ -474,13 +509,15 @@ impl ToTokens for ParserStateDefImpl<'_> {
             }
         })
         .collect::<TokenStream>();
-        let has_trailing_expr = fields.iter().any(|f| f.kind.is_trailing());
+        let has_catchall_unnamed = fields
+            .iter()
+            .any(|f| f.arg_names.is_empty() && !f.is_last && f.kind.is_catchall_unnamed_arg());
         let last_field = fields.iter().find(|f| f.is_last);
 
         let feed_unnamed_func = if feed_unnamed_body.is_empty() && last_field.is_none() {
             None
         } else {
-            if !has_trailing_expr {
+            if !has_catchall_unnamed {
                 feed_unnamed_body.extend(quote! {
                     __rt::Err(__rt::None)
                 });
