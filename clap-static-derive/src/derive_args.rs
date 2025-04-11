@@ -441,20 +441,18 @@ impl ToTokens for ParserStateDefImpl<'_> {
             .filter(|f| matches!(f.kind, FieldKind::Flatten))
             .map(|f| f.name);
         let feed_named_else = quote! {
-            #(if let __rt::Some(__r) = __rt::ParserStateDyn::feed_named(&mut self.#flatten_names, __name) {
-                __rt::Some(__r)
-            } else)*
+            #(__rt::ParserStateDyn::feed_named(&mut self.#flatten_names, __name)?;)*
         };
         let feed_named_func = if feed_named_arms.is_empty() && feed_named_else.is_empty() {
             None
         } else {
             feed_named_arms = if feed_named_arms.is_empty() {
-                quote! { #feed_named_else { __rt::None } }
+                quote! { #feed_named_else __rt::FeedNamed::Continue(()) }
             } else {
                 quote! {
-                    __rt::Some(match __name {
+                    __rt::FeedNamed::Break(match __name {
                         #feed_named_arms
-                        _ => return #feed_named_else { __rt::None }
+                        _ => { #feed_named_else return __rt::FeedNamed::Continue(()) }
                     })
                 }
             };

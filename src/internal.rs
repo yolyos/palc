@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::marker::PhantomData;
 use std::num::NonZero;
+use std::ops::ControlFlow;
 
 use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
@@ -145,7 +146,9 @@ pub fn place_for_subcommand<C: Subcommand>(place: &mut Option<C>) -> FeedUnnamed
     Ok(Some(Place::<C>::ref_cast_mut(place)))
 }
 
-pub type FeedNamed<'s> = Option<&'s mut dyn ArgPlace>;
+/// Break on a resolved place. Continue on unknown names.
+/// So we can `?` in generated code of `command(flatten)`.
+pub type FeedNamed<'s> = ControlFlow<&'s mut dyn ArgPlace>;
 
 /// This should be an enum, but be this for `?` support, which is unstable to impl.
 pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Error>>;
@@ -163,7 +166,7 @@ pub trait ParserState: ParserStateDyn {
 
 pub trait ParserStateDyn: 'static {
     fn feed_named(&mut self, _name: &str) -> FeedNamed<'_> {
-        None
+        ControlFlow::Continue(())
     }
 
     fn feed_unnamed(&mut self, _arg: &mut OsString, _is_last: bool) -> FeedUnnamed {
@@ -203,7 +206,7 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                 }
             }
             Arg::Named(name) => match state.feed_named(name) {
-                Some(place) => match place.num_values() {
+                ControlFlow::Break(place) => match place.num_values() {
                     NumValues::Zero => args.check_no_value()?,
                     NumValues::One {
                         require_equals: false,
@@ -216,7 +219,9 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                         place.feed(Cow::Borrowed(args.take_value_after_eq()?))?;
                     }
                 },
-                None => return Err(ErrorKind::UnknownNamedArgument.with_arg(name)),
+                ControlFlow::Continue(()) => {
+                    return Err(ErrorKind::UnknownNamedArgument.with_arg(name));
+                }
             },
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, false) {
                 Ok(None) => {}
