@@ -1,9 +1,9 @@
 use darling::FromDeriveInput;
 use darling::util::Override;
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{DeriveInput, Generics, Ident, Visibility};
+use syn::{DeriveInput, Error, Generics, Ident, Visibility};
 
 use crate::common::{ArgField, ArgOrCommand, ArgTyKind, TY_OPTION, strip_ty_ctor, wrap_anon_item};
 
@@ -54,7 +54,7 @@ fn expand_args_impl(def: &ArgsItemDef, is_parser: bool) -> syn::Result<ArgsImpl<
     };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
-        return Err(syn::Error::new(
+        return Err(Error::new(
             def.ident.span(),
             "TODO: generics are not supported yet",
         ));
@@ -93,27 +93,31 @@ impl ToTokens for ArgsImpl<'_> {
     }
 }
 
+#[derive(Debug)]
 pub struct ParserStateDefImpl<'i> {
     pub vis: &'i Visibility,
     pub state_name: Ident,
     pub output_ty: TokenStream,
     pub output_ctor: Option<TokenStream>,
-    fields: Vec<FieldInfo<'i>>,
+
+    named_fields: Vec<FieldInfo<'i>>,
+    unnamed_fields: Vec<FieldInfo<'i>>,
+    catchall_field: Option<CatchallFieldInfo<'i>>,
+    last_field: Option<FieldInfo<'i>>,
+    flatten_fields: Vec<FlattenFieldInfo<'i>>,
 }
 
+#[derive(Debug)]
 struct FieldInfo<'i> {
-    name: &'i Ident,
+    ident: &'i Ident,
     kind: FieldKind,
     /// The type used for parser inference, with `Option`/`Vec` stripped.
     effective_ty: &'i syn::Type,
-    /// The original type specified by the user.
-    original_ty: &'i syn::Type,
     /// Matching names for named arguments. Empty for unnamed arguments.
     arg_names: Vec<String>,
     /// Display name of the value.
     value_display: String,
     require_eq: bool,
-    is_last: bool,
 }
 
 impl FieldInfo<'_> {
@@ -124,11 +128,6 @@ impl FieldInfo<'_> {
             .map(String::as_str)
             .unwrap_or(&self.value_display)
     }
-
-    fn value_info(&self) -> TokenStream {
-        let ty = self.effective_ty;
-        quote_spanned! {ty.span()=> __rt::arg_value_info!(#ty) }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,25 +135,47 @@ enum FieldKind {
     BoolSetTrue,
     Option,
     UnwrapOption,
+
     Vec,
     OptionVec,
-    OptionSubcommand,
-    UnwrapSubcommand,
-    Flatten,
 }
 
-impl FieldKind {
-    fn is_catchall_unnamed_arg(&self) -> bool {
+#[derive(Debug)]
+enum CatchallFieldInfo<'i> {
+    Subcommand {
+        ident: &'i Ident,
+        effective_ty: &'i syn::Type,
+        optional: bool,
+    },
+    VecLike {
+        greedy: bool,
+        field: FieldInfo<'i>,
+    },
+}
+
+impl<'i> CatchallFieldInfo<'i> {
+    fn ident(&self) -> &'i Ident {
         match self {
-            FieldKind::BoolSetTrue
-            | FieldKind::Option
-            | FieldKind::UnwrapOption
-            | FieldKind::Flatten => false,
-            FieldKind::Vec
-            | FieldKind::OptionVec
-            | FieldKind::OptionSubcommand
-            | FieldKind::UnwrapSubcommand => true,
+            Self::Subcommand { ident, .. } => ident,
+            Self::VecLike { field, .. } => field.ident,
         }
+    }
+}
+
+#[derive(Debug)]
+struct FlattenFieldInfo<'i> {
+    ident: &'i Ident,
+    effective_ty: &'i syn::Type,
+}
+
+fn value_info(ty: &syn::Type) -> TokenStream {
+    quote_spanned! {ty.span()=> __rt::arg_value_info!(#ty) }
+}
+
+fn value_parsed(ty: &syn::Type) -> TokenStream {
+    let value_info = value_info(ty);
+    quote_spanned! {ty.span()=>
+        __rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?
     }
 }
 
@@ -169,153 +190,141 @@ pub fn expand_state_def_impl<'i>(
         state_name,
         output_ty,
         output_ctor: None,
-        fields: Vec::with_capacity(input_fields.len()),
-    };
-    let mut variable_arg_span = None;
-    let mut check_variable_arg = |span: Span| -> syn::Result<()> {
-        if let Some(prev_span) = variable_arg_span.replace(span) {
-            let mut err = syn::Error::new(
-                span,
-                "there can only be one variable length argument or subcommand",
-            );
-            err.combine(syn::Error::new(prev_span, "previous argument here"));
-            return Err(err);
-        }
-        Ok(())
+        named_fields: Vec::with_capacity(input_fields.len()),
+        unnamed_fields: Vec::with_capacity(input_fields.len()),
+        flatten_fields: Vec::with_capacity(input_fields.len()),
+        catchall_field: None,
+        last_field: None,
     };
 
     for field in input_fields {
-        let field_name = field.ident.as_ref().expect("checked by darling");
-
-        match &field.attrs {
-            ArgOrCommand::Arg(arg) => {
-                let arg_kind = field.arg_ty_kind();
-                if arg.last
-                    && (arg.is_named()
-                        || !matches!(arg_kind, ArgTyKind::Vec(_) | ArgTyKind::OptionVec(_)))
-                {
-                    return Err(syn::Error::new(
-                        field.ty.span(),
-                        "arg(last) must be used on a `Vec`-like positional argument",
-                    ));
-                }
-
-                let (kind, effective_ty) = match arg_kind {
-                    ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty),
-                    ArgTyKind::Vec(subty) => (FieldKind::Vec, subty),
-                    ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty),
-                    ArgTyKind::Option(subty) => (FieldKind::Option, subty),
-                    ArgTyKind::Convert => (FieldKind::UnwrapOption, &field.ty),
-                };
-
-                let field_name_str = field_name.to_string();
-                let mut arg_names = Vec::new();
-                let mut value_display = String::new();
-                if !arg.is_named() {
-                    value_display = arg
-                        .value_name
-                        .clone()
-                        .unwrap_or_else(|| heck::AsShoutySnakeCase(field_name_str).to_string());
-
-                    if arg.trailing_var_arg
-                        && !matches!(arg_kind, ArgTyKind::Vec(_) | ArgTyKind::OptionVec(_))
-                    {
-                        return Err(syn::Error::new(
-                            field.ty.span(),
-                            "arg(trailing_var_arg) can only be used on arguments with `Vec`-like types",
-                        ));
-                    }
-                } else {
-                    if let Some(ch) = &arg.short {
-                        let ch = ch.clone().unwrap_or_else(|| {
-                            field_name_str.chars().next().expect("must have name")
-                        });
-                        value_display = format!("-{ch}");
-                        arg_names.push(ch.to_string());
-                    }
-                    for &short in arg.short_alias.iter() {
-                        arg_names.push(short.to_string());
-                    }
-                    if let Some(name) = &arg.long {
-                        let long_name = match name {
-                            Override::Inherit => {
-                                format!("--{}", heck::AsKebabCase(&field_name_str))
-                            }
-                            Override::Explicit(s) => format!("--{s}"),
-                        };
-                        // Prefer long names for display.
-                        value_display = long_name.clone();
-                        arg_names.push(long_name);
-                    }
-                    for long in arg.alias.iter() {
-                        arg_names.push(format!("--{long}"));
-                    }
-                    assert!(!arg_names.is_empty());
-                }
-
-                out.fields.push(FieldInfo {
-                    name: field_name,
-                    kind,
-                    effective_ty,
-                    original_ty: &field.ty,
-                    arg_names,
-                    value_display,
-                    require_eq: arg.require_equals,
-                    is_last: arg.last,
-                });
-            }
+        let ident = field.ident.as_ref().expect("checked by darling");
+        let arg = match &field.attrs {
+            ArgOrCommand::Arg(arg) => arg,
             ArgOrCommand::Subcommand => {
-                check_variable_arg(field_name.span())?;
-                let (kind, effective_ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
-                    Some(subty) => (FieldKind::OptionSubcommand, subty),
-                    None => (FieldKind::UnwrapSubcommand, &field.ty),
+                let (optional, effective_ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
+                    Some(subty) => (true, subty),
+                    None => (false, &field.ty),
                 };
-                out.fields.push(FieldInfo {
-                    name: field_name,
-                    kind,
+                let info = CatchallFieldInfo::Subcommand {
+                    ident,
                     effective_ty,
-                    original_ty: &field.ty,
-                    arg_names: Vec::new(),
-                    value_display: "COMMAND".into(),
-                    require_eq: false,
-                    is_last: false,
-                });
+                    optional,
+                };
+                if let Some(prev) = out.catchall_field.replace(info) {
+                    let mut err = Error::new(ident.span(), "duplicated variable-length arguments");
+                    err.combine(Error::new(prev.ident().span(), "previously defined here"));
+                    return Err(err);
+                }
+                continue;
             }
             ArgOrCommand::Flatten => {
-                out.fields.push(FieldInfo {
-                    name: field_name,
-                    kind: FieldKind::Flatten,
+                out.flatten_fields.push(FlattenFieldInfo {
+                    ident,
                     effective_ty: &field.ty,
-                    original_ty: &field.ty,
-                    arg_names: Vec::new(),
-                    value_display: String::new(),
-                    require_eq: false,
-                    is_last: false,
                 });
+                continue;
+            }
+        };
+
+        let arg_kind = field.arg_ty_kind();
+        let (kind, effective_ty) = match arg_kind {
+            ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty),
+            ArgTyKind::Vec(subty) => (FieldKind::Vec, subty),
+            ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty),
+            ArgTyKind::Option(subty) => (FieldKind::Option, subty),
+            ArgTyKind::Convert => (FieldKind::UnwrapOption, &field.ty),
+        };
+
+        let field_name_str = ident.to_string();
+        let mut arg_names = Vec::new();
+        if arg.is_named() {
+            // Named arguments.
+
+            let mut value_display = String::new();
+
+            if arg.last || arg.trailing_var_arg {
+                return Err(Error::new(
+                    field.ty.span(),
+                    "arg(last, trailing_var_arg) must be used on positional arguments",
+                ));
+            }
+
+            if let Some(ch) = &arg.short {
+                let ch = ch
+                    .clone()
+                    .unwrap_or_else(|| field_name_str.chars().next().expect("must have name"));
+                value_display = format!("-{ch}");
+                arg_names.push(ch.to_string());
+            }
+            for &short in arg.short_alias.iter() {
+                arg_names.push(short.to_string());
+            }
+            if let Some(name) = &arg.long {
+                let long_name = match name {
+                    Override::Inherit => {
+                        format!("--{}", heck::AsKebabCase(&field_name_str))
+                    }
+                    Override::Explicit(s) => format!("--{s}"),
+                };
+                // Prefer long names for display.
+                value_display = long_name.clone();
+                arg_names.push(long_name);
+            }
+            for long in arg.alias.iter() {
+                arg_names.push(format!("--{long}"));
+            }
+            assert!(!arg_names.is_empty());
+
+            out.named_fields.push(FieldInfo {
+                ident,
+                kind,
+                effective_ty,
+                arg_names,
+                value_display,
+                require_eq: arg.require_equals,
+            });
+        } else {
+            // Unamed arguments.
+
+            let value_display = arg
+                .value_name
+                .clone()
+                .unwrap_or_else(|| heck::AsShoutySnakeCase(field_name_str).to_string());
+            let is_vec_like = matches!(kind, FieldKind::Vec | FieldKind::OptionVec);
+            let info = FieldInfo {
+                ident,
+                kind,
+                effective_ty,
+                arg_names: Vec::new(),
+                value_display,
+                require_eq: false,
+            };
+
+            if arg.last {
+                // Last argument(s).
+                if let Some(prev) = out.last_field.replace(info) {
+                    let mut errs = Error::new(ident.span(), "duplicated arg(last)");
+                    errs.combine(Error::new(prev.ident.span(), "previously defined here"));
+                    return Err(errs);
+                }
+            } else if is_vec_like {
+                // Variable length unnamed argument.
+                let info = CatchallFieldInfo::VecLike {
+                    field: info,
+                    greedy: arg.trailing_var_arg,
+                };
+                if let Some(prev) = out.catchall_field.replace(info) {
+                    let mut errs = Error::new(ident.span(), "duplicated variable-length arguments");
+                    errs.combine(Error::new(prev.ident().span(), "previously defined here"));
+                    return Err(errs);
+                }
+            } else {
+                // Single unnamed argument.
+                out.unnamed_fields.push(info);
             }
         }
     }
-
-    out.fields.sort_by_key(|f| {
-        let mut rank = 0u8;
-        // Last is last.
-        if f.is_last {
-            return 8;
-        }
-        // Named before unnamed first.
-        if f.arg_names.is_empty() {
-            rank += 4;
-        }
-        // Catchall on the tail.
-        if f.kind.is_catchall_unnamed_arg() {
-            rank += 2;
-        }
-        // Direct preceeds nested.
-        if matches!(f.kind, FieldKind::Flatten) {
-            rank += 1;
-        }
-        rank
-    });
 
     Ok(out)
 }
@@ -327,125 +336,129 @@ impl ToTokens for ParserStateDefImpl<'_> {
             state_name,
             output_ty,
             output_ctor,
-            fields,
+            named_fields,
+            unnamed_fields,
+            catchall_field,
+            last_field,
+            flatten_fields,
         } = self;
         let output_ctor = output_ctor.as_ref().unwrap_or(&self.output_ty);
 
-        // State field initialization and finalization.
-
-        let check_missing = fields
+        // State initialization and finalization.
+        //
+        // T / Option<T>            => Option<T>
+        // Vec<T> / Option<Vec<T>>  => Option<Vec<T>>
+        // FlattenTy                => <FlattenTy as ArgsInternal>::__State
+        // SubcommandTy             => Option<SubcommandTy>
+        let mut field_names = Vec::new();
+        let mut field_tys = Vec::new();
+        let mut field_inits = Vec::new();
+        let mut field_finishes = Vec::new();
+        let mut check_missings = TokenStream::new();
+        for f in named_fields
             .iter()
-            .filter_map(|f| {
-                let name = f.name;
-                let display_name = f.display_name();
-                match f.kind {
-                    FieldKind::BoolSetTrue
-                    | FieldKind::Option
-                    | FieldKind::Vec
-                    | FieldKind::OptionVec
-                    | FieldKind::OptionSubcommand
-                    | FieldKind::Flatten => None,
-                    FieldKind::UnwrapSubcommand => Some(quote! {
-                        if self.#name.is_none() {
-                            return __rt::missing_required_subcmd();
-                        }
-                    }),
-                    FieldKind::UnwrapOption => Some(quote! {
-                        if self.#name.is_none() {
-                            return __rt::missing_required_arg(#display_name);
-                        }
-                    }),
-                }
-            })
-            .collect::<TokenStream>();
-
-        let field_names = fields.iter().map(|f| &f.name).collect::<Vec<_>>();
-        let field_tys = fields
-            .iter()
-            .map(|f| {
-                let effective_ty = &f.effective_ty;
-                match f.kind {
-                    FieldKind::BoolSetTrue
-                    | FieldKind::Option
-                    | FieldKind::Vec
-                    | FieldKind::OptionVec
-                    | FieldKind::OptionSubcommand => f.original_ty.to_token_stream(),
-                    FieldKind::UnwrapOption | FieldKind::UnwrapSubcommand => {
-                        quote! { __rt::Option<#effective_ty> }
-                    }
-                    FieldKind::Flatten => {
-                        quote! { <#effective_ty as __rt::ArgsInternal>::__State }
-                    }
-                }
-            })
-            .collect::<Vec<_>>();
-        let field_inits = fields.iter().map(|f| match f.kind {
-            FieldKind::BoolSetTrue => quote! { false },
-            FieldKind::Option
-            | FieldKind::UnwrapOption
-            | FieldKind::OptionVec
-            | FieldKind::UnwrapSubcommand
-            | FieldKind::OptionSubcommand => quote! { __rt::None },
-            FieldKind::Vec => quote! { __rt::Vec::new() },
-            FieldKind::Flatten => quote! { __rt::ParserState::init() },
-        });
-        let field_finishes = fields.iter().map(|f| {
-            let name = f.name;
+            .chain(unnamed_fields)
+            .chain(last_field.as_ref())
+        {
+            let ident = f.ident;
+            let effective_ty = f.effective_ty;
+            let display_name = f.display_name();
+            field_names.push(ident);
             match f.kind {
-                FieldKind::BoolSetTrue
-                | FieldKind::Option
-                | FieldKind::Vec
-                | FieldKind::OptionVec
-                | FieldKind::OptionSubcommand => quote! { self.#name },
-                FieldKind::UnwrapOption | FieldKind::UnwrapSubcommand => {
-                    quote! { self.#name.unwrap() }
+                FieldKind::BoolSetTrue | FieldKind::Option | FieldKind::UnwrapOption => {
+                    field_tys.push(quote! { __rt::Option<#effective_ty> });
+                    field_inits.push(quote! { __rt::None });
+                    if f.kind == FieldKind::UnwrapOption {
+                        check_missings.extend(quote! {
+                            if self.#ident.is_none() {
+                                return __rt::missing_required_arg(#display_name)
+                            }
+                        });
+                    }
                 }
-                FieldKind::Flatten => quote! { __rt::ParserState::finish(self.#name)? },
+                FieldKind::Vec | FieldKind::OptionVec => {
+                    field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
+                    field_inits.push(quote! { __rt::None });
+                }
+            };
+            let tail = match f.kind {
+                FieldKind::UnwrapOption => quote! { .unwrap() },
+                FieldKind::BoolSetTrue | FieldKind::Vec => quote! { .unwrap_or_default() },
+                FieldKind::Option | FieldKind::OptionVec => quote!(),
+            };
+            field_finishes.push(quote! { self.#ident #tail });
+        }
+        match catchall_field {
+            None => {}
+            Some(CatchallFieldInfo::Subcommand {
+                ident,
+                effective_ty,
+                optional,
+            }) => {
+                field_names.push(ident);
+                field_tys.push(quote! { __rt::Option<#effective_ty> });
+                field_inits.push(quote! { __rt::None });
+                let tail = if *optional {
+                    quote!()
+                } else {
+                    check_missings.extend(quote! {
+                        if self.#ident.is_none() {
+                            return __rt::missing_required_subcmd()
+                        }
+                    });
+                    quote! { .unwrap() }
+                };
+                field_finishes.push(quote! { self.#ident #tail });
             }
-        });
+            Some(CatchallFieldInfo::VecLike { field, .. }) => {
+                let ident = field.ident;
+                let effective_ty = field.effective_ty;
+                field_names.push(field.ident);
+                field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
+                field_inits.push(quote! { __rt::None });
+                let tail = (field.kind == FieldKind::Vec).then(|| quote! { .unwrap_or_default() });
+                field_finishes.push(quote! { self.#ident #tail });
+            }
+        }
+        for f in flatten_fields {
+            let ident = f.ident;
+            let effective_ty = f.effective_ty;
+            field_names.push(f.ident);
+            field_tys.push(quote! { <#effective_ty as __rt::ArgsInternal>::__State });
+            field_inits.push(quote! { __rt::ParserState::init() });
+            field_finishes.push(quote! { __rt::ParserState::finish(self.#ident)? });
+        }
 
         // Named argument dispatcher.
 
-        let mut feed_named_arms = fields
+        let mut feed_named_arms = named_fields
             .iter()
-            .filter(|f| !f.arg_names.is_empty())
             .map(|f| {
-                let name = f.name;
+                let ident = f.ident;
                 let arg_names = &f.arg_names;
                 let require_eq = f.require_eq;
-                let value_info = f.value_info();
+                let value_info = value_info(f.effective_ty);
                 let span = f.effective_ty.span();
                 let action = match f.kind {
                     FieldKind::BoolSetTrue => {
-                        quote! {{ self.#name = true; __rt::place_for_flag() }}
+                        quote! {{ self.#ident = Some(true); __rt::place_for_flag() }}
                     }
                     FieldKind::Option | FieldKind::UnwrapOption => quote_spanned! {span=>
-                        __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#name, #value_info)
+                        __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#ident, #value_info)
                     },
-                    FieldKind::Vec => quote_spanned! {span=>
-                        __rt::place_for_vec::<_, _, #require_eq>(&mut self.#name, #value_info)
+                    FieldKind::Vec | FieldKind::OptionVec => quote_spanned! {span=>
+                        __rt::place_for_vec::<_, _, #require_eq>(self.#ident.get_or_insert_default(), #value_info)
                     },
-                    FieldKind::OptionVec => quote_spanned! {span=>
-                        __rt::place_for_vec::<_, _, #require_eq>(self.#name.get_or_insert_default(), #value_info)
-                    },
-                    // Handle later.
-                    FieldKind::Flatten => TokenStream::new(),
-                    FieldKind::OptionSubcommand | FieldKind::UnwrapSubcommand => unreachable!(),
                 };
-                quote! {
-                    #(#arg_names)|* => #action,
-                }
+                quote! { #(#arg_names)|* => #action, }
             })
             .collect::<TokenStream>();
-        let flatten_names = fields
-            .iter()
-            .filter(|f| matches!(f.kind, FieldKind::Flatten))
-            .map(|f| f.name);
+        let flatten_names = flatten_fields.iter().map(|f| f.ident);
         let feed_named_else = quote! {
             #(__rt::ParserStateDyn::feed_named(&mut self.#flatten_names, __name)?;)*
         };
         let feed_named_func = if feed_named_arms.is_empty() && feed_named_else.is_empty() {
-            None
+            TokenStream::new()
         } else {
             feed_named_arms = if feed_named_arms.is_empty() {
                 quote! { #feed_named_else __rt::FeedNamed::Continue(()) }
@@ -457,91 +470,78 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     })
                 }
             };
-            Some(quote! {
+            quote! {
                 fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
                     #feed_named_arms
                 }
-            })
+            }
         };
 
-        // Positional argument dispatcher.
+        // Unnamed argument dispatcher.
 
-        // FIXME: This is O(n) on each call.
-        let mut feed_unnamed_body = fields.iter().filter_map(|f| {
-            if !f.arg_names.is_empty() || f.is_last {
-                return None;
-            }
-            let name = f.name;
-            let value_info = f.value_info();
-            let span = f.effective_ty.span();
-            let parsed = quote_spanned! {span=>
-                __rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?
-            };
-            match f.kind {
-                FieldKind::BoolSetTrue => unreachable!(),
-                FieldKind::Option | FieldKind::UnwrapOption => Some(quote! {
-                    if self.#name.is_none() {
-                        self.#name = __rt::Some(#parsed);
-                        return __rt::Ok(__rt::None);
-                    }
-                }),
-                FieldKind::Flatten => Some(quote_spanned! {span=>
-                    match __rt::ParserStateDyn::feed_unnamed(&mut self.#name, __arg, __is_last) {
-                        __rt::Err(__rt::None) => {},
-                        __ret => return __ret
-                    }
-                }),
-                // Tail arguments.
-                // FIXME: trailing_var_arg
-                FieldKind::Vec => Some(quote! {
-                    self.#name.push(#parsed);
-                    __rt::Ok(__rt::None)
-                }),
-                FieldKind::OptionVec => Some(quote! {
-                    self.#name.get_or_insert_default().push(#parsed);
-                    __rt::Ok(__rt::None)
-                }),
-                FieldKind::OptionSubcommand |
-                FieldKind::UnwrapSubcommand => Some(quote_spanned! {span=>
-                    __rt::place_for_subcommand(&mut self.#name)
-                }),
-            }
-        })
-        .collect::<TokenStream>();
-        let has_catchall_unnamed = fields
-            .iter()
-            .any(|f| f.arg_names.is_empty() && !f.is_last && f.kind.is_catchall_unnamed_arg());
-        let last_field = fields.iter().find(|f| f.is_last);
-
-        let feed_unnamed_func = if feed_unnamed_body.is_empty() && last_field.is_none() {
-            None
+        let feed_unnamed_func = if unnamed_fields.is_empty()
+            && catchall_field.is_none()
+            && last_field.is_none()
+        {
+            quote!()
         } else {
-            if !has_catchall_unnamed {
-                feed_unnamed_body.extend(quote! {
-                    __rt::Err(__rt::None)
-                });
-            }
-            if let Some(f) = last_field {
-                let name = f.name;
-                let value_info = f.value_info();
-                let get_or_insert = matches!(f.kind, FieldKind::OptionVec)
-                    .then(|| quote! { .get_or_insert_default() });
-                feed_unnamed_body = quote! {
-                    if !__is_last {
-                        #feed_unnamed_body
-                    } else {
-                        __rt::place_for_trailing_var_arg(&mut self.#name #get_or_insert, #value_info)
+            // FIXME: This is O(n) on each call.
+            let mut body = unnamed_fields
+                .iter()
+                .map(|f| {
+                    let name = f.ident;
+                    let parsed = value_parsed(f.effective_ty);
+                    quote! {
+                        if self.#name.is_none() {
+                            self.#name = __rt::Some(#parsed);
+                            return __rt::Ok(__rt::None);
+                        }
                     }
-                };
-            }
-            Some(quote! {
-                fn feed_unnamed(&mut self, __arg: &mut __rt::OsString, __is_last: bool) -> __rt::FeedUnnamed {
-                    #feed_unnamed_body
+                })
+                .collect::<TokenStream>();
+
+            let catchall = if let Some(f) = catchall_field {
+                match f {
+                    CatchallFieldInfo::Subcommand { ident, .. } => {
+                        quote! { __rt::place_for_subcommand(&mut self.#ident) }
+                    }
+                    CatchallFieldInfo::VecLike { greedy, field } => {
+                        let ident = field.ident;
+                        if *greedy {
+                            let value_info = value_info(field.effective_ty);
+                            quote! { __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info) }
+                        } else {
+                            let parsed = value_parsed(field.effective_ty);
+                            quote! { self.#ident.get_or_insert_default().push(#parsed); __rt::Ok(__rt::None) }
+                        }
+                    }
                 }
-            })
+            } else {
+                quote! { __rt::Err(__rt::None) }
+            };
+            body.extend(catchall);
+
+            let handle_last = if let Some(f) = last_field {
+                let ident = f.ident;
+                let value_info = value_info(f.effective_ty);
+                quote! {
+                    if __is_last {
+                        return __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info);
+                    }
+                }
+            } else {
+                quote!()
+            };
+
+            quote! {
+                fn feed_unnamed(&mut self, __arg: &mut __rt::OsString, __is_last: bool) -> __rt::FeedUnnamed {
+                    #handle_last
+                    #body
+                }
+            }
         };
 
-        let args_info_lit = ArgsInfoLiteral { fields };
+        let args_info_lit = ArgsInfoLiteral(self);
 
         tokens.extend(quote! {
             // FIXME: Visibility is still broken with `command(flatten)`.
@@ -563,7 +563,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 }
 
                 fn finish(self) -> __rt::Result<Self::Output> {
-                    #check_missing
+                    #check_missings
                     __rt::Ok(#output_ctor {
                         #(#field_names : #field_finishes,)*
                     })
@@ -580,58 +580,58 @@ impl ToTokens for ParserStateDefImpl<'_> {
 }
 
 /// Generates the reflection constant with type `ArgsInfo`.
-struct ArgsInfoLiteral<'a> {
-    fields: &'a [FieldInfo<'a>],
-}
+struct ArgsInfoLiteral<'a>(&'a ParserStateDefImpl<'a>);
 
 impl ToTokens for ArgsInfoLiteral<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self { fields } = self;
-        let named_args = fields.iter().filter(|f| !f.arg_names.is_empty()).map(|f| {
-            let FieldInfo {
-                arg_names,
-                value_display,
-                require_eq,
-                ..
-            } = f;
-            let long_names = arg_names.iter().filter(|s| s.starts_with("--"));
-            let short_names = arg_names
-                .iter()
-                .filter(|s| !s.starts_with("--"))
-                .map(|s| format!("-{s}"));
-            quote! {
-                __rt::refl::NamedArgInfo::new(
-                    &[#(#long_names),*],
-                    &[#(#short_names),*],
-                    #value_display,
-                    #require_eq,
-                )
-            }
-        });
-        let unnamed_args = fields
-            .iter()
-            .filter(|f| f.arg_names.is_empty() && f.kind != FieldKind::Flatten && !f.is_last)
-            .map(|f| {
-                let FieldInfo { value_display, .. } = f;
+        let ParserStateDefImpl {
+            named_fields,
+            unnamed_fields,
+            last_field,
+            flatten_fields,
+            ..
+        } = self.0;
+
+        let named_args = named_fields.iter().map(
+            |FieldInfo {
+                 arg_names,
+                 value_display,
+                 require_eq,
+                 ..
+             }| {
+                let long_names = arg_names.iter().filter(|s| s.starts_with("--"));
+                let short_names = arg_names
+                    .iter()
+                    .filter(|s| !s.starts_with("--"))
+                    .map(|s| format!("-{s}"));
                 quote! {
-                    __rt::refl::UnnamedArgInfo::new(
+                    __rt::refl::NamedArgInfo::new(
+                        &[#(#long_names),*],
+                        &[#(#short_names),*],
                         #value_display,
+                        #require_eq,
                     )
                 }
+            },
+        );
+        let unnamed_args = unnamed_fields
+            .iter()
+            .map(|FieldInfo { value_display, .. }| {
+                quote! { __rt::refl::UnnamedArgInfo::new(#value_display) }
             });
-        let last_arg = match fields.iter().find(|f| f.is_last) {
+        // TODO: catchall_field
+        let last_arg = match last_field {
             Some(FieldInfo { value_display, .. }) => quote! {
                 __rt::Some(__rt::refl::UnnamedArgInfo::new(#value_display))
             },
             None => quote! { __rt::None },
         };
-        let flatten_args = fields
-            .iter()
-            .filter(|f| f.kind == FieldKind::Flatten)
-            .map(|f| {
-                let ty = f.effective_ty;
-                quote! { &<#ty as __rt::ArgsInternal>::__State::ARGS_INFO }
-            });
+        let flatten_args =
+            flatten_fields
+                .iter()
+                .map(|FlattenFieldInfo { effective_ty, .. }| {
+                    quote! { &<#effective_ty as __rt::ArgsInternal>::__State::ARGS_INFO }
+                });
 
         tokens.extend(quote! {
             __rt::refl::ArgsInfo::new(
