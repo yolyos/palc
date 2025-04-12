@@ -2,7 +2,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use syn::{DeriveInput, Ident, Type};
 
-use crate::common::{ErrorCollector, wrap_anon_item};
+use crate::common::{ErrorCollector, TopCommandMeta, wrap_anon_item};
 use crate::derive_args::ParserStateDefImpl;
 
 pub(crate) fn expand(input: DeriveInput) -> TokenStream {
@@ -107,8 +107,11 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
                 syn::Fields::Named(fields) => {
                     let state_name =
                         format_ident!("{enum_name}{variant_name}State", span = variant_name.span());
+                    // TODO: Should this also include enum attributes?
+                    let cmd_meta = errs.collect(TopCommandMeta::parse_attrs(&variant.attrs))?;
                     let mut state = errs.collect(crate::derive_args::expand_state_def_impl(
                         &def.vis,
+                        Some(cmd_meta),
                         state_name.clone(),
                         enum_name.to_token_stream(),
                         fields,

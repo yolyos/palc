@@ -1,33 +1,38 @@
 use std::fmt::Write;
 
-use crate::refl::{ArgsInfo, CommandInfo};
+use crate::refl::CommandInfo;
 
 pub(crate) type SubcommandPath = Vec<(String, CommandInfo)>;
 
 pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Result {
-    write!(out, "Usage:")?;
     let ((last_cmd, cmd_info), ancestors) = path.split_first().unwrap();
-    for (subcmd, _) in ancestors.iter().rev() {
-        write!(out, " {subcmd}")?;
-    }
-    if let Some(args) = cmd_info.catchall().or_else(|| {
+    let Some(info) = cmd_info.catchall().or_else(|| {
         cmd_info
             .commands()
             .find_map(|(c, args)| (c == last_cmd).then_some(args))
-    }) {
-        // Inside a valid subcommand.
-        write!(out, " {last_cmd}")?;
-        generate_for_args(args, out)?;
-    } else {
+    }) else {
         // Invalid last subcommand, help for all subcommands?
         todo!();
+    };
+    // Inside a valid subcommand.
+
+    // About this (sub)command.
+    let app = info.app().unwrap();
+    let about = app.about();
+    for s in about.all_paragraphs() {
+        writeln!(out, "{s}")?;
     }
-    Ok(())
-}
+    writeln!(out)?;
 
-fn generate_for_args(info: &ArgsInfo, out: &mut String) -> std::fmt::Result {
+    // Usage of current subcommand path.
+
+    write!(out, "Usage:")?;
+    for (subcmd, _) in ancestors.iter().rev() {
+        write!(out, " {subcmd}")?;
+    }
+    write!(out, " {last_cmd}")?;
+
     let mut has_named @ mut has_unnamed = false;
-
     // TODO: Hide optional arguments?
     for arg in info.named_args() {
         has_named = true;
@@ -58,12 +63,16 @@ fn generate_for_args(info: &ArgsInfo, out: &mut String) -> std::fmt::Result {
     }
     writeln!(out)?;
 
+    // List of commands.
+
     if let Some((_, cmd_info)) = info.subcommand() {
         writeln!(out, "\nCommands:")?;
         for (cmd, _) in cmd_info.commands() {
             writeln!(out, "    {cmd}")?;
         }
     }
+
+    // List of unnamed arguments.
 
     if has_unnamed {
         writeln!(out, "\nArguments:")?;
@@ -82,6 +91,8 @@ fn generate_for_args(info: &ArgsInfo, out: &mut String) -> std::fmt::Result {
             }
         }
     }
+
+    // List of named arguments.
 
     if has_named {
         writeln!(out, "\nOptions:")?;

@@ -299,6 +299,7 @@ impl ArgMeta {
     }
 }
 
+/// The inner `command(..)` on fields of `derive(Parser, Args, Subcommand)`.
 pub enum ArgsCommandMeta {
     Subcommand,
     Flatten,
@@ -317,6 +318,69 @@ impl Parse for ArgsCommandMeta {
                 "must be either 'subcommand' or 'flatten'",
             ));
         })
+    }
+}
+
+/// The top-level `command(..)` on the struct/enum of `derive(Parser, Args, Subcommand)`.
+#[derive(Default)]
+pub struct TopCommandMeta {
+    pub doc: Doc,
+
+    pub name: Option<LitStr>,
+    pub version: Option<Override<syn::Expr>>,
+    pub author: Option<Override<syn::Expr>>,
+    pub about: Option<Override<syn::Expr>>,
+    pub long_about: Option<Override<syn::Expr>>,
+    // TODO: verbatim_doc_comment, next_display_order, next_help_heading, rename_all{,_env}
+}
+
+impl TopCommandMeta {
+    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
+        let mut errs = ErrorCollector::default();
+        let mut doc = Doc::default();
+        let mut this = Self::default();
+        for attr in attrs {
+            doc.extend_from_attr(attr)?;
+            if attr.path().is_ident("command") {
+                errs.collect(attr.parse_nested_meta(|meta| this.parse_update(meta)));
+            } else if attr.path().is_ident("arg") {
+                errs.push(syn::Error::new(
+                    attr.span(),
+                    "arg(..) is not supported here, do you mean command(..)?",
+                ));
+            }
+        }
+        doc.post_process();
+        this.doc = doc;
+        errs.finish_then(this)
+    }
+
+    fn parse_update(&mut self, meta: ParseNestedMeta<'_>) -> syn::Result<()> {
+        let path = &meta.path;
+        if path.is_ident("name") {
+            if self.name.is_some() {
+                return Err(syn::Error::new(path.span(), "duplicated attribute"));
+            }
+            self.name = Some(meta.value()?.parse()?);
+        } else if path.is_ident("version") {
+            parse_unique_override(&mut self.version, &meta)?;
+        } else if path.is_ident("author") {
+            parse_unique_override(&mut self.author, &meta)?;
+        } else if path.is_ident("about") {
+            parse_unique_override(&mut self.about, &meta)?;
+        } else if path.is_ident("long_about") {
+            parse_unique_override(&mut self.long_about, &meta)?;
+        } else {
+            if cfg!(feature = "__test-allow-unknown-fields") {
+                if meta.input.peek(Token![=]) {
+                    meta.value()?.parse::<syn::Expr>()?;
+                }
+                return Ok(());
+            }
+            return Err(syn::Error::new(path.span(), "unknown attribute"));
+        }
+
+        Ok(())
     }
 }
 
@@ -372,11 +436,23 @@ pub enum Override<T> {
 impl<T: Parse> Parse for Override<T> {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(if input.peek(Token![=]) {
+            input.parse::<Token![=]>()?;
             Self::Explicit(input.parse()?)
         } else {
             Self::Inherit
         })
     }
+}
+
+fn parse_unique_override(
+    place: &mut Option<Override<impl Parse>>,
+    meta: &ParseNestedMeta<'_>,
+) -> syn::Result<()> {
+    if place.is_some() {
+        return Err(syn::Error::new(meta.path.span(), "duplicated attribute"));
+    }
+    *place = Some(meta.input.parse()?);
+    Ok(())
 }
 
 /// Collect doc-comments into a single string.
@@ -385,7 +461,7 @@ impl<T: Parse> Parse for Override<T> {
 /// the first line is the summary, and each of rest lines corresponds to a paragraph.
 ///
 /// See `src/refl.rs` for runtime usage that depends on this.
-#[derive(Default)]
+#[derive(Default, PartialEq)]
 pub struct Doc(String);
 
 impl Doc {
@@ -423,6 +499,10 @@ impl Doc {
             }
         }
         Ok(())
+    }
+
+    pub fn summary(&self) -> &str {
+        self.0.split_once("\n").unwrap_or((&self.0, "")).0
     }
 }
 

@@ -26,7 +26,7 @@ pub mod __private {
     pub use std::borrow::Cow;
     use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
-    pub use std::{concat, unimplemented};
+    pub use std::{concat, env, unimplemented};
     pub use {Default, Err, Iterator, None, Ok, Option, Some, Vec, char, str, usize};
 
     // Used by `arg_value_info!`

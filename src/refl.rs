@@ -1,5 +1,64 @@
 const MAX_ITER_DEPTH: usize = 4;
 
+/// Description of a self-contained applet.
+///
+/// Only available via `derive(Parser, Subcommand)`, not `derive(Args)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AppInfo {
+    name: &'static str,
+    version: Option<&'static str>,
+    author: Option<&'static str>,
+    about: Option<&'static str>,
+    long_about: Option<&'static str>,
+}
+
+impl AppInfo {
+    // NB. Used by proc-macro.
+    #[doc(hidden)]
+    pub const fn __new(
+        name: &'static str,
+        version: &'static str,
+        author: &'static str,
+        about: &'static str,
+        long_about: &'static str,
+    ) -> Self {
+        // Workaround: `bool::then_some` is not a const fn.
+        macro_rules! opt {
+            ($e:expr) => {
+                if $e.is_empty() { None } else { Some($e) }
+            };
+        }
+        Self {
+            name,
+            version: opt!(version),
+            author: opt!(author),
+            about: opt!(about),
+            long_about: opt!(long_about),
+        }
+    }
+}
+
+impl AppInfo {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub fn version(&self) -> Option<&'static str> {
+        self.version
+    }
+
+    pub fn author(&self) -> Option<&'static str> {
+        self.author
+    }
+
+    pub fn about(&self) -> Doc {
+        Doc {
+            summary: self.about.unwrap_or(""),
+            full: self.long_about.unwrap_or(""),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ArgsInfo {
     direct_named_args: &'static [NamedArgInfo],
@@ -12,6 +71,8 @@ pub struct ArgsInfo {
     flatten_args: &'static [&'static ArgsInfo],
     total_named_arg_cnt: usize,
     total_unnamed_arg_cnt: usize,
+
+    app: Option<&'static AppInfo>,
 }
 
 impl ArgsInfo {
@@ -24,6 +85,7 @@ impl ArgsInfo {
         mut subcommand: Option<(bool, CommandInfo)>,
         mut last_arg: Option<UnnamedArgInfo>,
         flatten_args: &'static [&'static ArgsInfo],
+        app: Option<&'static AppInfo>,
     ) -> Self {
         let mut total_named_arg_cnt = direct_named_args.len();
         let mut total_unnamed_arg_cnt = direct_unnamed_args.len();
@@ -66,6 +128,7 @@ impl ArgsInfo {
             flatten_args,
             total_named_arg_cnt,
             total_unnamed_arg_cnt,
+            app,
         }
     }
 
@@ -80,6 +143,7 @@ impl ArgsInfo {
             flatten_args: &[],
             total_named_arg_cnt: 0,
             total_unnamed_arg_cnt: 0,
+            app: None,
         }
     }
 
@@ -143,6 +207,10 @@ impl ArgsInfo {
 
     pub(crate) fn subcommand(&self) -> Option<(bool, CommandInfo)> {
         self.subcommand
+    }
+
+    pub fn app(&self) -> Option<&AppInfo> {
+        self.app
     }
 }
 
@@ -249,22 +317,27 @@ impl CommandInfo {
     }
 }
 
-// See `clap-static-derive/src/common.rs` for proc-macro pre-processing.
+// See `Doc` in `clap-static-derive/src/common.rs` for proc-macro pre-processing.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Doc {
-    doc: &'static str,
+    summary: &'static str,
+    full: &'static str,
 }
 
 impl Doc {
     fn from_raw(doc: &'static str) -> Option<Self> {
-        (!doc.is_empty()).then_some(Self { doc })
+        if doc.is_empty() {
+            return None;
+        }
+        let (summary, _) = doc.split_once("\n").unwrap_or((doc, ""));
+        Some(Doc { summary, full: doc })
     }
 
     pub fn summary(&self) -> &str {
-        self.all_paragraphs().next().unwrap_or(self.doc)
+        self.summary
     }
 
     pub fn all_paragraphs(&self) -> impl Iterator<Item = &str> {
-        self.doc.lines()
+        self.full.lines()
     }
 }

@@ -5,7 +5,7 @@ use syn::{DeriveInput, Error, Ident, Visibility};
 
 use crate::common::{
     ArgOrCommand, ArgTyKind, ArgsCommandMeta, Doc, ErrorCollector, Override, TY_OPTION,
-    parse_args_attrs, strip_ty_ctor, wrap_anon_item,
+    TopCommandMeta, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
 };
 
 pub fn expand(input: DeriveInput, is_parser: bool) -> TokenStream {
@@ -56,10 +56,24 @@ fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<
         ));
     }
 
+    let mut errs = ErrorCollector::default();
+    let cmd_meta = errs.collect(TopCommandMeta::parse_attrs(&def.attrs));
+
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
-    let state = expand_state_def_impl(&def.vis, state_name, struct_name, fields)?;
-    Ok(ArgsImpl { is_parser, state })
+    let state = errs.collect(expand_state_def_impl(
+        &def.vis,
+        cmd_meta,
+        state_name,
+        struct_name,
+        fields,
+    ));
+
+    errs.finish()?;
+    Ok(ArgsImpl {
+        is_parser,
+        state: state.unwrap(),
+    })
 }
 
 impl ToTokens for ArgsImpl<'_> {
@@ -100,6 +114,7 @@ pub struct ParserStateDefImpl<'i> {
     catchall_field: Option<CatchallFieldInfo<'i>>,
     last_field: Option<FieldInfo<'i>>,
     flatten_fields: Vec<FlattenFieldInfo<'i>>,
+    cmd_attrs: Option<TopCommandMeta>,
 }
 
 struct FieldInfo<'i> {
@@ -166,14 +181,15 @@ fn value_parsed(ty: &syn::Type) -> TokenStream {
 
 pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
+    cmd_attrs: Option<TopCommandMeta>,
     state_name: Ident,
     output_ty: TokenStream,
     input_fields: &'i syn::FieldsNamed,
 ) -> syn::Result<ParserStateDefImpl<'i>> {
     let field_attrs = parse_args_attrs(input_fields)?;
+    let input_fields = &input_fields.named;
 
     let mut errs = ErrorCollector::default();
-    let input_fields = &input_fields.named;
 
     let mut out = ParserStateDefImpl {
         vis,
@@ -185,6 +201,7 @@ pub fn expand_state_def_impl<'i>(
         flatten_fields: Vec::with_capacity(input_fields.len()),
         catchall_field: None,
         last_field: None,
+        cmd_attrs,
     };
 
     for (field, attrs) in input_fields.iter().zip(field_attrs) {
@@ -343,6 +360,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
             catchall_field,
             last_field,
             flatten_fields,
+            ..
         } = self;
         let output_ctor = output_ctor.as_ref().unwrap_or(&self.output_ty);
 
@@ -592,6 +610,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
             catchall_field,
             last_field,
             flatten_fields,
+            cmd_attrs,
             ..
         } = self.0;
 
@@ -670,6 +689,8 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                     quote! { &<<#effective_ty as __rt::ArgsInternal>::__State as __rt::ParserState>::ARGS_INFO }
                 });
 
+        let app_info = AppInfoLiteral(cmd_attrs.as_ref());
+
         tokens.extend(quote! {
             __rt::refl::ArgsInfo::__new(
                 &[#(#named_args),*],
@@ -678,7 +699,66 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                 #subcmd,
                 #last_arg,
                 &[#(#flatten_args),*],
+                #app_info,
             )
+        });
+    }
+}
+
+/// Generates the reflection constant with type `Option<&'static AppInfo>`.
+struct AppInfoLiteral<'i>(Option<&'i TopCommandMeta>);
+
+impl ToTokens for AppInfoLiteral<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Some(TopCommandMeta {
+            doc,
+            name,
+            version,
+            author,
+            about,
+            long_about,
+        }) = self.0
+        else {
+            tokens.extend(quote! { __rt::None });
+            return;
+        };
+
+        let name = match name {
+            Some(s) => quote! { #s },
+            None => quote! { __rt::env!("CARGO_PKG_NAME") },
+        };
+        let version = match version {
+            Some(Override::Explicit(s)) => quote! { #s },
+            Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_VERSION") },
+            None => quote! { "" },
+        };
+        let author = match author {
+            Some(Override::Explicit(s)) => quote! { #s },
+            Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_AUTHORS") },
+            None => quote! { "" },
+        };
+        let about = match about {
+            Some(Override::Explicit(s)) => quote! { #s },
+            Some(Override::Inherit) => doc.summary().to_token_stream(),
+            None => quote! { "" },
+        };
+        let long_about = match long_about {
+            Some(Override::Explicit(s)) => quote! { #s },
+            Some(Override::Inherit) => doc.to_token_stream(),
+            None => quote! { "" },
+        };
+
+        tokens.extend(quote! {
+            // Force promote in case of any arguments referencing statics.
+            __rt::Some(&const {
+                __rt::refl::AppInfo::__new(
+                    #name,
+                    #version,
+                    #author,
+                    #about,
+                    #long_about,
+                )
+            })
         });
     }
 }
