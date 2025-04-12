@@ -1,28 +1,17 @@
-use darling::FromDeriveInput;
-use darling::util::Override;
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{DeriveInput, Error, Generics, Ident, Visibility};
+use syn::{DeriveInput, Error, Ident, Visibility};
 
-use crate::common::{ArgField, ArgOrCommand, ArgTyKind, TY_OPTION, strip_ty_ctor, wrap_anon_item};
-
-#[derive(FromDeriveInput)]
-#[darling(supports(struct_named))]
-pub struct ArgsItemDef {
-    pub vis: Visibility,
-    pub ident: Ident,
-    pub generics: Generics,
-    pub data: darling::ast::Data<(), ArgField>,
-}
+use crate::common::{
+    ArgOrCommand, ArgTyKind, ArgsCommandMeta, ErrorCollector, Override, TY_OPTION,
+    parse_args_attrs, strip_ty_ctor, wrap_anon_item,
+};
 
 pub fn expand(input: DeriveInput, is_parser: bool) -> TokenStream {
-    let mut tts = match ArgsItemDef::from_derive_input(&input) {
-        Err(err) => err.write_errors(),
-        Ok(def) => match expand_args_impl(&def, is_parser) {
-            Ok(out) => return wrap_anon_item(out),
-            Err(err) => err.into_compile_error(),
-        },
+    let mut tts = match expand_args_impl(&input, is_parser) {
+        Ok(out) => return wrap_anon_item(out),
+        Err(err) => err.into_compile_error(),
     };
 
     // Error fallback impl.
@@ -48,9 +37,16 @@ pub struct ArgsImpl<'i> {
     state: ParserStateDefImpl<'i>,
 }
 
-fn expand_args_impl(def: &ArgsItemDef, is_parser: bool) -> syn::Result<ArgsImpl<'_>> {
-    let darling::ast::Data::Struct(fields) = &def.data else {
-        unreachable!("checked by darling")
+fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<'_>> {
+    let syn::Data::Struct(syn::DataStruct {
+        fields: syn::Fields::Named(fields),
+        ..
+    }) = &def.data
+    else {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            "derive(Args) and derive(Parser) can only be used on named structs",
+        ));
     };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
@@ -62,7 +58,7 @@ fn expand_args_impl(def: &ArgsItemDef, is_parser: bool) -> syn::Result<ArgsImpl<
 
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
-    let state = expand_state_def_impl(&def.vis, state_name, struct_name, &fields.fields)?;
+    let state = expand_state_def_impl(&def.vis, state_name, struct_name, fields)?;
     Ok(ArgsImpl { is_parser, state })
 }
 
@@ -93,7 +89,6 @@ impl ToTokens for ArgsImpl<'_> {
     }
 }
 
-#[derive(Debug)]
 pub struct ParserStateDefImpl<'i> {
     pub vis: &'i Visibility,
     pub state_name: Ident,
@@ -107,7 +102,6 @@ pub struct ParserStateDefImpl<'i> {
     flatten_fields: Vec<FlattenFieldInfo<'i>>,
 }
 
-#[derive(Debug)]
 struct FieldInfo<'i> {
     ident: &'i Ident,
     kind: FieldKind,
@@ -132,7 +126,6 @@ enum FieldKind {
     OptionVec,
 }
 
-#[derive(Debug)]
 enum CatchallFieldInfo<'i> {
     Subcommand {
         ident: &'i Ident,
@@ -154,7 +147,6 @@ impl<'i> CatchallFieldInfo<'i> {
     }
 }
 
-#[derive(Debug)]
 struct FlattenFieldInfo<'i> {
     ident: &'i Ident,
     effective_ty: &'i syn::Type,
@@ -175,8 +167,13 @@ pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
     state_name: Ident,
     output_ty: TokenStream,
-    input_fields: &'i [ArgField],
+    input_fields: &'i syn::FieldsNamed,
 ) -> syn::Result<ParserStateDefImpl<'i>> {
+    let field_attrs = parse_args_attrs(input_fields)?;
+
+    let mut errs = ErrorCollector::default();
+    let input_fields = &input_fields.named;
+
     let mut out = ParserStateDefImpl {
         vis,
         state_name,
@@ -189,14 +186,14 @@ pub fn expand_state_def_impl<'i>(
         last_field: None,
     };
 
-    for field in input_fields {
-        let ident = field.ident.as_ref().expect("checked by darling");
+    for (field, attrs) in input_fields.iter().zip(&field_attrs) {
+        let ident = field.ident.as_ref().expect("named struct");
         let ident_str = ident.to_string();
         let value_display = heck::AsShoutySnekCase(&ident_str).to_string();
 
-        let arg = match &field.attrs {
+        let arg = match attrs {
             ArgOrCommand::Arg(arg) => arg,
-            ArgOrCommand::Subcommand => {
+            ArgOrCommand::Command(ArgsCommandMeta::Subcommand) => {
                 let (optional, effective_ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
                     Some(subty) => (true, subty),
                     None => (false, &field.ty),
@@ -207,13 +204,15 @@ pub fn expand_state_def_impl<'i>(
                     optional,
                 };
                 if let Some(prev) = out.catchall_field.replace(info) {
-                    let mut err = Error::new(ident.span(), "duplicated variable-length arguments");
-                    err.combine(Error::new(prev.ident().span(), "previously defined here"));
-                    return Err(err);
+                    errs.push(Error::new(
+                        ident.span(),
+                        "duplicated variable-length arguments",
+                    ));
+                    errs.push(Error::new(prev.ident().span(), "previously defined here"));
                 }
                 continue;
             }
-            ArgOrCommand::Flatten => {
+            ArgOrCommand::Command(ArgsCommandMeta::Flatten) => {
                 out.flatten_fields.push(FlattenFieldInfo {
                     ident,
                     effective_ty: &field.ty,
@@ -222,8 +221,7 @@ pub fn expand_state_def_impl<'i>(
             }
         };
 
-        let arg_kind = field.arg_ty_kind();
-        let (kind, effective_ty) = match arg_kind {
+        let (kind, effective_ty) = match ArgTyKind::of(&field.ty) {
             ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty),
             ArgTyKind::Vec(subty) => (FieldKind::Vec, subty),
             ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty),
@@ -238,16 +236,18 @@ pub fn expand_state_def_impl<'i>(
             let mut name_display = String::new();
 
             if arg.last || arg.trailing_var_arg {
-                return Err(Error::new(
+                errs.push(Error::new(
                     field.ty.span(),
                     "arg(last, trailing_var_arg) must be used on positional arguments",
                 ));
+                continue;
             }
 
             if let Some(ch) = &arg.short {
-                let ch = ch
-                    .clone()
-                    .unwrap_or_else(|| ident_str.chars().next().expect("must have name"));
+                let ch = match ch {
+                    Override::Explicit(c) => *c,
+                    Override::Inherit => ident_str.chars().next().expect("must have name"),
+                };
                 name_display = format!("-{ch}");
                 arg_names.push(ch.to_string());
             }
@@ -300,9 +300,9 @@ pub fn expand_state_def_impl<'i>(
             if arg.last {
                 // Last argument(s).
                 if let Some(prev) = out.last_field.replace(info) {
-                    let mut errs = Error::new(ident.span(), "duplicated arg(last)");
-                    errs.combine(Error::new(prev.ident.span(), "previously defined here"));
-                    return Err(errs);
+                    errs.push(Error::new(ident.span(), "duplicated arg(last)"));
+                    errs.push(Error::new(prev.ident.span(), "previously defined here"));
+                    continue;
                 }
             } else if is_vec_like {
                 // Variable length unnamed argument.
@@ -311,9 +311,12 @@ pub fn expand_state_def_impl<'i>(
                     greedy: arg.trailing_var_arg,
                 };
                 if let Some(prev) = out.catchall_field.replace(info) {
-                    let mut errs = Error::new(ident.span(), "duplicated variable-length arguments");
-                    errs.combine(Error::new(prev.ident().span(), "previously defined here"));
-                    return Err(errs);
+                    errs.push(Error::new(
+                        ident.span(),
+                        "duplicated variable-length arguments",
+                    ));
+                    errs.push(Error::new(prev.ident().span(), "previously defined here"));
+                    continue;
                 }
             } else {
                 // Single unnamed argument.

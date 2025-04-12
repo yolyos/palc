@@ -1,28 +1,14 @@
-use darling::FromDeriveInput;
-use darling::ast::Style;
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote};
-use syn::{DeriveInput, Generics, Ident, Type, Visibility};
+use syn::{DeriveInput, Ident, Type};
 
-use crate::common::{CommandVariant, wrap_anon_item};
+use crate::common::{ErrorCollector, wrap_anon_item};
 use crate::derive_args::ParserStateDefImpl;
 
-#[derive(FromDeriveInput)]
-#[darling(supports(enum_any))]
-struct SubcommandDef {
-    vis: Visibility,
-    ident: Ident,
-    generics: Generics,
-    data: darling::ast::Data<CommandVariant, ()>,
-}
-
 pub(crate) fn expand(input: DeriveInput) -> TokenStream {
-    let mut tts = match SubcommandDef::from_derive_input(&input) {
-        Err(err) => err.write_errors(),
-        Ok(def) => match expand_impl(&def) {
-            Ok(out) => return wrap_anon_item(out),
-            Err(err) => err.into_compile_error(),
-        },
+    let mut tts = match expand_impl(&input) {
+        Ok(out) => return wrap_anon_item(out),
+        Err(err) => err.into_compile_error(),
     };
 
     let name = &input.ident;
@@ -78,9 +64,12 @@ impl ToTokens for VariantImpl<'_> {
     }
 }
 
-fn expand_impl(def: &SubcommandDef) -> syn::Result<SubcommandImpl<'_>> {
-    let darling::ast::Data::Enum(input_variants) = &def.data else {
-        unreachable!("checked by darling")
+fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
+    let syn::Data::Enum(data) = &def.data else {
+        return Err(syn::Error::new(
+            Span::call_site(),
+            "derive(Subcommand) can only be used on enums",
+        ));
     };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
@@ -90,45 +79,50 @@ fn expand_impl(def: &SubcommandDef) -> syn::Result<SubcommandImpl<'_>> {
         ));
     }
 
+    let mut errs = ErrorCollector::default();
     let enum_name = &def.ident;
-    let mut state_defs = Vec::with_capacity(input_variants.len());
+    let mut state_defs = Vec::with_capacity(data.variants.len());
 
-    let variants = input_variants
+    let variants = data
+        .variants
         .iter()
-        .map(|variant| {
+        .filter_map(|variant| {
             let variant_name = &variant.ident;
             let arg_name = heck::AsKebabCase(variant_name.to_string()).to_string();
-            let act = match variant.fields.style {
-                Style::Unit => VariantImpl::Unit { variant_name },
-                Style::Tuple if variant.fields.fields.len() == 1 => VariantImpl::Tuple {
-                    variant_name,
-                    ty: &variant.fields.fields[0].ty,
-                },
-                Style::Tuple => {
-                    return Err(syn::Error::new(
-                        variant_name.span(),
-                        "non-1-element tuple variant is not supported",
-                    ));
+            let act = match &variant.fields {
+                syn::Fields::Unit => VariantImpl::Unit { variant_name },
+                syn::Fields::Unnamed(fields) => {
+                    if fields.unnamed.len() != 1 {
+                        errs.push(syn::Error::new(
+                            variant_name.span(),
+                            "subcommand tuple variant must have a single element",
+                        ));
+                        return None;
+                    }
+                    VariantImpl::Tuple {
+                        variant_name,
+                        ty: &fields.unnamed[0].ty,
+                    }
                 }
-                Style::Struct => {
+                syn::Fields::Named(fields) => {
                     let state_name =
                         format_ident!("{enum_name}{variant_name}State", span = variant_name.span());
-                    let mut state = crate::derive_args::expand_state_def_impl(
+                    let mut state = errs.collect(crate::derive_args::expand_state_def_impl(
                         &def.vis,
                         state_name.clone(),
                         enum_name.to_token_stream(),
-                        &variant.fields.fields,
-                    )?;
+                        fields,
+                    ))?;
                     state.output_ctor = Some(quote!(#enum_name :: #variant_name));
                     state_defs.push(state);
                     VariantImpl::Struct { state_name }
                 }
             };
-            Ok((arg_name, act))
+            Some((arg_name, act))
         })
-        .collect::<syn::Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
-    Ok(SubcommandImpl {
+    errs.finish_then(SubcommandImpl {
         enum_name,
         state_defs,
         variants,

@@ -1,15 +1,61 @@
 use std::ops;
 
-use darling::util::Override;
-use darling::{Error, FromField, FromMeta, FromVariant, Result};
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
+use syn::meta::ParseNestedMeta;
+use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{Attribute, Expr, GenericArgument, Ident, PathArguments, Type};
+use syn::{Attribute, GenericArgument, LitBool, LitChar, LitStr, PathArguments, Type};
+use syn::{Token, bracketed, token};
 
 pub const TY_BOOL: &str = "bool";
 pub const TY_OPTION: &str = "Option";
 pub const TY_VEC: &str = "Vec";
+
+#[derive(Default)]
+pub(crate) struct ErrorCollector {
+    err: Option<syn::Error>,
+    defused: bool,
+}
+
+impl ErrorCollector {
+    pub fn collect<T>(&mut self, ret: syn::Result<T>) -> Option<T> {
+        match ret {
+            Ok(v) => Some(v),
+            Err(e) => {
+                self.push(e);
+                None
+            }
+        }
+    }
+
+    pub fn push(&mut self, e: syn::Error) {
+        match &mut self.err {
+            Some(prev) => prev.combine(e),
+            p @ None => *p = Some(e),
+        }
+    }
+
+    pub fn finish(mut self) -> syn::Result<()> {
+        self.defused = true;
+        match self.err.take() {
+            None => Ok(()),
+            Some(e) => Err(e),
+        }
+    }
+
+    pub fn finish_then<T>(self, v: T) -> syn::Result<T> {
+        self.finish().map(|_| v)
+    }
+}
+
+impl Drop for ErrorCollector {
+    fn drop(&mut self) {
+        if !self.defused && !std::thread::panicking() {
+            assert!(self.err.is_none(), "error not finished");
+        }
+    }
+}
 
 /// `TyCtor<ArgTy>` => `ArgTy`. `ty_ctor` must be a single-identifier path.
 pub fn strip_ty_ctor<'i>(mut ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
@@ -36,12 +82,6 @@ pub fn strip_ty_ctor<'i>(mut ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
     None
 }
 
-#[derive(FromVariant)]
-pub struct CommandVariant {
-    pub ident: Ident,
-    pub fields: darling::ast::Fields<ArgField>,
-}
-
 pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
     quote! {
         const _: () = {
@@ -49,16 +89,6 @@ pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
             #tts
         };
     }
-}
-
-#[derive(FromField)]
-#[darling(forward_attrs(arg, command))]
-pub struct ArgField {
-    pub ident: Option<Ident>,
-    pub ty: Type,
-
-    #[darling(with = parse_arg_or_command)]
-    pub attrs: ArgOrCommand,
 }
 
 pub enum ArgTyKind<'a> {
@@ -69,9 +99,8 @@ pub enum ArgTyKind<'a> {
     OptionVec(&'a Type),
 }
 
-impl ArgField {
-    pub fn arg_ty_kind(&self) -> ArgTyKind<'_> {
-        let ty = &self.ty;
+impl ArgTyKind<'_> {
+    pub fn of(ty: &syn::Type) -> ArgTyKind<'_> {
         if matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident(TY_BOOL)) {
             return ArgTyKind::Bool;
         }
@@ -89,46 +118,54 @@ impl ArgField {
     }
 }
 
-fn parse_arg_or_command(attrs: Vec<Attribute>) -> Result<ArgOrCommand> {
-    let mut arg = None;
-    let mut command = None;
-    for attr in attrs {
-        let path = attr.path();
-        if path.is_ident("arg") {
-            if arg.is_some() {
-                return Err(Error::duplicate_field("arg").with_span(&path.span()));
-            }
-            arg = Some(ArgMeta::from_meta(&attr.meta)?);
-        } else if path.is_ident("command") {
-            if command.is_some() {
-                return Err(Error::duplicate_field("command").with_span(&path.span()));
-            }
-            command = Some((path.span(), CommandMeta::from_meta(&attr.meta)?));
-        }
-    }
-    if let (Some(_), Some((span, _))) = (&arg, &command) {
-        return Err(Error::custom("#[arg(..)] conflicts with #[command(..)]").with_span(span));
-    }
-
-    if let Some((_, cmd)) = &command {
-        if cmd.subcommand {
-            return Ok(ArgOrCommand::Subcommand);
-        }
-        return Ok(ArgOrCommand::Flatten);
-    }
-
-    Ok(ArgOrCommand::Arg(arg.unwrap_or_default()))
-}
-
 pub enum ArgOrCommand {
     Arg(ArgMeta),
-    Subcommand,
-    Flatten,
+    Command(ArgsCommandMeta),
 }
 
-#[derive(FromMeta, Default)]
-#[cfg_attr(feature = "__test-allow-unknown-fields", darling(allow_unknown_fields))]
-#[darling(default, and_then = ArgMeta::validate)]
+/// Parse `arg(..)` and `command(..)` in `derive(Args)`-like struct or variants.
+pub fn parse_args_attrs(fields: &syn::FieldsNamed) -> syn::Result<Vec<ArgOrCommand>> {
+    let mut errs = ErrorCollector::default();
+    let attrs = fields
+        .named
+        .iter()
+        .filter_map(|f| errs.collect(ArgOrCommand::parse_attrs(&f.attrs)))
+        .collect();
+    errs.finish_then(attrs)
+}
+
+impl ArgOrCommand {
+    fn parse_attrs(attrs: &[Attribute]) -> syn::Result<ArgOrCommand> {
+        let mut errs = ErrorCollector::default();
+        let mut arg = None::<ArgMeta>;
+        let mut command = None;
+        for attr in attrs {
+            let path = attr.path();
+            if path.is_ident("arg") {
+                let arg = arg.get_or_insert_default();
+                errs.collect(attr.parse_nested_meta(|meta| arg.parse_update(meta)));
+            } else if path.is_ident("command") {
+                if let Some(c) = errs.collect(attr.parse_args::<ArgsCommandMeta>()) {
+                    if command.is_some() {
+                        errs.push(syn::Error::new(path.span(), "duplicated command(..)"));
+                    }
+                    command = Some((path.span(), c));
+                }
+            }
+        }
+        let ret = if let Some((span, c)) = command {
+            if arg.is_some() {
+                errs.push(syn::Error::new(span, "command(..) conflicts with arg(..)"));
+            }
+            Self::Command(c)
+        } else {
+            Self::Arg(arg.unwrap_or_default())
+        };
+        errs.finish_then(ret)
+    }
+}
+
+#[derive(Default)]
 pub struct ArgMeta {
     // Names.
     pub long: Option<Override<String>>,
@@ -155,17 +192,7 @@ pub struct ArgMeta {
     // Help & completion.
     pub help: Option<String>,
     pub long_help: Option<String>,
-    pub display_order: Option<usize>,
-    pub help_heading: Option<String>,
-    pub next_line_help: bool,
-    pub hide: bool,
-    pub hide_possible_values: bool,
-    pub hide_default_value: bool,
-    pub hide_env: bool,
-    pub hide_env_values: bool,
-    pub hide_short_help: bool,
-    pub hide_long_help: bool,
-    // TODO: add
+    // TODO: add, hide*, next_line_help, help_heading, display_order
 
     // Validation.
     // TODO: exclusive, requires, default_value_if{,s}, required_unless_present*, required_if*,
@@ -177,47 +204,122 @@ impl ArgMeta {
         self.long.is_some() || self.short.is_some()
     }
 
-    fn validate(self) -> Result<Self> {
-        if self.is_named() {
-            if self.trailing_var_arg || self.last {
-                return Err(Error::custom(
-                    "arg(trailing_var_arg, last) is only useful for positional arguments",
-                ));
+    fn parse_update(&mut self, meta: ParseNestedMeta<'_>) -> syn::Result<()> {
+        let path = &meta.path;
+        let span = path.span();
+        macro_rules! ensure {
+            ($cond:expr, $msg:expr) => {
+                if !$cond {
+                    return Err(syn::Error::new(span, $msg));
+                }
+            };
+        }
+        macro_rules! check_dup {
+            ($name:ident) => {
+                ensure!(
+                    self.$name.is_none(),
+                    concat!("duplicated arg(", stringify!($name), ")")
+                );
+            };
+        }
+        macro_rules! check_true {
+            () => {
+                let v = meta.value()?.parse::<LitBool>()?;
+                if !v.value {
+                    return Err(syn::Error::new(v.span, "must be true"));
+                }
+            };
+        }
+
+        if path.is_ident("long") {
+            check_dup!(long);
+            self.long = Some(if meta.input.peek(Token![=]) {
+                let v = meta.value()?.parse::<LitStr>()?.value();
+                Override::Explicit(v)
+            } else {
+                Override::Inherit
+            });
+        } else if path.is_ident("short") {
+            check_dup!(short);
+            self.short = Some(if meta.input.peek(Token![=]) {
+                let v = meta.value()?.parse::<LitChar>()?.value();
+                Override::Explicit(v)
+            } else {
+                Override::Inherit
+            });
+        } else if path.is_ident("alias") || path.is_ident("aliases") {
+            self.alias.extend(
+                meta.value()?
+                    .parse::<OneOrArray<LitStr>>()?
+                    .into_iter()
+                    .map(|s| s.value()),
+            );
+        } else if path.is_ident("short_alias") || path.is_ident("short_aliases") {
+            self.short_alias.extend(
+                meta.value()?
+                    .parse::<OneOrArray<LitChar>>()?
+                    .into_iter()
+                    .map(|s| s.value()),
+            );
+        } else if path.is_ident("value_name") {
+            check_dup!(value_name);
+            self.value_name = Some(meta.value()?.parse::<LitStr>()?.value());
+        } else if path.is_ident("require_equals") {
+            check_true!();
+            self.require_equals = true;
+        } else if path.is_ident("trailing_var_arg") {
+            check_true!();
+            self.trailing_var_arg = true;
+        } else if path.is_ident("last") {
+            check_true!();
+            self.last = true;
+        } else if path.is_ident("help") {
+            check_dup!(help);
+            self.help = Some(meta.value()?.parse::<LitStr>()?.value());
+        } else if path.is_ident("long_help") {
+            check_dup!(long_help);
+            self.help = Some(meta.value()?.parse::<LitStr>()?.value());
+        } else {
+            if cfg!(feature = "__test-allow-unknown-fields") {
+                if meta.input.peek(Token![=]) {
+                    meta.value()?.parse::<syn::Expr>()?;
+                }
+                return Ok(());
             }
-        } else if self.require_equals {
-            return Err(Error::custom(
-                "arg(require_equals) is only useful for named arguments",
-            ));
+            ensure!(false, "unknown attribute");
         }
-        Ok(self)
+        Ok(())
     }
 }
 
-#[derive(FromMeta)]
-#[darling(and_then = CommandMeta::validate)]
-pub struct CommandMeta {
-    #[darling(default)]
-    pub subcommand: bool,
-    #[darling(default)]
-    pub flatten: bool,
+pub enum ArgsCommandMeta {
+    Subcommand,
+    Flatten,
 }
 
-impl CommandMeta {
-    fn validate(self) -> Result<Self> {
-        if !self.subcommand && !self.flatten {
-            return Err(Error::custom("empty `#[command(..)]`"));
-        }
-        if self.subcommand && self.flatten {
-            return Err(Error::custom(
-                "`#[command(subcommand)]` conflicts with `#[command(flatten)]`",
+impl Parse for ArgsCommandMeta {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let ident = input.parse::<syn::Ident>()?;
+        Ok(if ident == "subcommand" {
+            Self::Subcommand
+        } else if ident == "flatten" {
+            Self::Flatten
+        } else {
+            return Err(syn::Error::new(
+                ident.span(),
+                "must be either 'subcommand' or 'flatten'",
             ));
-        }
-        Ok(self)
+        })
     }
 }
 
-#[derive(Default)]
 pub struct OneOrArray<T>(pub Vec<T>);
+
+impl<T> Default for OneOrArray<T> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
 
 impl<T> ops::Deref for OneOrArray<T> {
     type Target = [T];
@@ -226,25 +328,46 @@ impl<T> ops::Deref for OneOrArray<T> {
     }
 }
 
-impl<T: FromMeta> FromMeta for OneOrArray<T> {
-    fn from_value(value: &syn::Lit) -> Result<Self> {
-        T::from_value(value).map(|elem| Self(vec![elem]))
+impl<T> IntoIterator for OneOrArray<T> {
+    type Item = T;
+    type IntoIter = std::vec::IntoIter<T>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
     }
+}
 
-    fn from_expr(expr: &Expr) -> Result<Self> {
-        match *expr {
-            Expr::Array(ref arr) => {
-                let mut errs = darling::Error::accumulator();
-                let mut ret = Vec::with_capacity(arr.elems.len());
-                for elem in arr.elems.iter() {
-                    ret.extend(errs.handle(T::from_expr(elem)));
-                }
-                errs.finish_with(Self(ret))
-            }
-            Expr::Lit(ref lit) => Self::from_value(&lit.lit),
-            Expr::Group(ref group) => Self::from_expr(&group.expr),
-            _ => Err(Error::unexpected_expr_type(expr)),
-        }
-        .map_err(|e| e.with_span(expr))
+impl<T> Extend<T> for OneOrArray<T> {
+    fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
+        self.0.extend(iter);
+    }
+}
+
+impl<T: Parse> Parse for OneOrArray<T> {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self(if input.peek(token::Bracket) {
+            let inner;
+            bracketed!(inner in input);
+            inner
+                .parse_terminated(T::parse, Token![,])?
+                .into_iter()
+                .collect()
+        } else {
+            vec![input.parse::<T>()?]
+        }))
+    }
+}
+
+pub enum Override<T> {
+    Inherit,
+    Explicit(T),
+}
+
+impl<T: Parse> Parse for Override<T> {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(if input.peek(Token![=]) {
+            Self::Explicit(input.parse()?)
+        } else {
+            Self::Inherit
+        })
     }
 }

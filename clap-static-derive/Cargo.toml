@@ -10,7 +10,6 @@ proc-macro = true
 __test-allow-unknown-fields = []
 
 [dependencies]
-darling = "0.20.11"
 heck = "0.5.0"
 proc-macro2 = "1.0.94"
 quote = "1.0.40"
