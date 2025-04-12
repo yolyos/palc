@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use crate::help::SubcommandPath;
 use crate::internal::CommandInternal;
 
 #[derive(Debug)]
@@ -11,7 +10,9 @@ pub struct Error(Box<Inner>);
 struct Inner {
     kind: ErrorKind,
     arg: Option<Arg>,
-    subcommand_path: SubcommandPath,
+
+    #[cfg(feature = "help")]
+    subcommand_path: crate::help::SubcommandPath,
 }
 
 #[derive(Debug)]
@@ -28,6 +29,7 @@ pub(crate) enum ErrorKind {
     MissingArg0,
     MissingEq,
 
+    #[cfg(feature = "help")]
     Help,
 
     Custom(String),
@@ -98,6 +100,7 @@ impl fmt::Display for Error {
                 write!(f, "missing required '=' for argument{maybe_arg}")
             }
 
+            #[cfg(feature = "help")]
             ErrorKind::Help => {
                 let mut out = String::new();
                 crate::help::generate(&self.0.subcommand_path, &mut out).unwrap();
@@ -125,8 +128,14 @@ impl Error {
         self
     }
 
+    #[cfg(feature = "help")]
     pub(crate) fn in_subcommand<C: CommandInternal>(mut self, name: String) -> Self {
         self.0.subcommand_path.push((name, C::COMMAND_INFO));
+        self
+    }
+
+    #[cfg(not(feature = "help"))]
+    pub(crate) fn in_subcommand<C: CommandInternal>(self, _name: String) -> Self {
         self
     }
 }
@@ -136,6 +145,7 @@ impl From<ErrorKind> for Error {
         Self(Box::new(Inner {
             arg: None,
             kind: repr,
+            #[cfg(feature = "help")]
             subcommand_path: Vec::new(),
         }))
     }

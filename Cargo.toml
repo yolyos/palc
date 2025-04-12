@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = []
+default = ["help"]
+help = []
 
 __test-allow-unknown-fields = ["clap-static-derive/__test-allow-unknown-fields"]
 

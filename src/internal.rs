@@ -229,6 +229,7 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                 },
                 ControlFlow::Continue(()) => {
                     // TODO: Configurable help?
+                    #[cfg(feature = "help")]
                     if name == "h" || name == "--help" {
                         return Err(ErrorKind::Help.into());
                     }

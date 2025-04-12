@@ -1,3 +1,7 @@
+#![cfg_attr(
+    not(feature = "help"),
+    expect(unused, reason = "some getters are only used by help")
+)]
 const MAX_ITER_DEPTH: usize = 4;
 
 /// Description of a self-contained applet.
