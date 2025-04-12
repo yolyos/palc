@@ -1,3 +1,5 @@
+const MAX_ITER_DEPTH: usize = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ArgsInfo {
     direct_named_args: &'static [NamedArgInfo],
@@ -66,9 +68,7 @@ impl ArgsInfo {
             total_unnamed_arg_cnt,
         }
     }
-}
 
-impl ArgsInfo {
     // NB. Used by proc-macro.
     pub const fn empty() -> Self {
         Self {
@@ -82,13 +82,75 @@ impl ArgsInfo {
             total_unnamed_arg_cnt: 0,
         }
     }
+
+    pub fn named_args(&self) -> impl Iterator<Item = &NamedArgInfo> {
+        let mut stack = [None; MAX_ITER_DEPTH];
+        let mut top = 0usize;
+        stack[0] = Some((self, 0usize));
+        std::iter::from_fn(move || {
+            loop {
+                let (info, i) = stack[top].as_mut()?;
+                if *i < info.direct_named_args.len() {
+                    *i += 1;
+                    return Some(&info.direct_named_args[*i - 1]);
+                }
+                if let Some(deep) = info.flatten_args.get(*i - info.direct_named_args.len()) {
+                    if top == MAX_ITER_DEPTH {
+                        panic!("arg(flatten) too deep");
+                    }
+                    *i += 1;
+                    top += 1;
+                    stack[top] = Some((deep, 0));
+                } else if top == 0 {
+                    return None;
+                } else {
+                    top -= 1;
+                }
+            }
+        })
+    }
+
+    pub fn unnamed_args(&self) -> impl Iterator<Item = &UnnamedArgInfo> {
+        let mut stack = [None; MAX_ITER_DEPTH];
+        let mut top = 0usize;
+        stack[0] = Some((self, 0usize));
+        std::iter::from_fn(move || {
+            loop {
+                let (info, i) = stack[top].as_mut()?;
+                if *i < info.direct_unnamed_args.len() {
+                    *i += 1;
+                    return Some(&info.direct_unnamed_args[*i - 1]);
+                }
+                if let Some(deep) = info.flatten_args.get(*i - info.direct_unnamed_args.len()) {
+                    if top == MAX_ITER_DEPTH {
+                        panic!("arg(flatten) too deep");
+                    }
+                    *i += 1;
+                    top += 1;
+                    stack[top] = Some((deep, 0));
+                } else if top == 0 {
+                    return None;
+                } else {
+                    top -= 1;
+                }
+            }
+        })
+    }
+
+    pub(crate) fn trailing_var_arg(&self) -> Option<(bool, UnnamedArgInfo)> {
+        self.trailing_var_arg
+    }
+
+    pub(crate) fn subcommand(&self) -> Option<(bool, CommandInfo)> {
+        self.subcommand
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NamedArgInfo {
     long_names: &'static [&'static str],
     short_names: &'static [&'static str],
-    value_display: &'static str,
+    value_display: &'static [&'static str],
     require_eq: bool,
 }
 
@@ -98,7 +160,7 @@ impl NamedArgInfo {
     pub const fn __new(
         long_names: &'static [&'static str],
         short_names: &'static [&'static str],
-        value_display: &'static str,
+        value_display: &'static [&'static str],
         require_eq: bool,
     ) -> Self {
         Self {
@@ -107,6 +169,22 @@ impl NamedArgInfo {
             value_display,
             require_eq,
         }
+    }
+
+    pub fn long_names(&self) -> &[&str] {
+        self.long_names
+    }
+
+    pub fn short_names(&self) -> &[&str] {
+        self.short_names
+    }
+
+    pub fn value_display(&self) -> &[&str] {
+        self.value_display
+    }
+
+    pub fn requires_eq(&self) -> bool {
+        self.require_eq
     }
 }
 
@@ -121,17 +199,40 @@ impl UnnamedArgInfo {
     pub const fn __new(value_display: &'static str) -> Self {
         Self { value_display }
     }
+
+    pub fn value_display(&self) -> &str {
+        self.value_display
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CommandInfo {
-    commands: &'static [(Option<&'static str>, &'static ArgsInfo)],
+    commands: &'static [(&'static str, &'static ArgsInfo)],
+    catchall: Option<&'static ArgsInfo>,
 }
 
 impl CommandInfo {
     // NB. Used by proc-macro.
     #[doc(hidden)]
-    pub const fn __new(commands: &'static [(Option<&'static str>, &'static ArgsInfo)]) -> Self {
-        Self { commands }
+    pub const fn __new(commands: &'static [(&'static str, &'static ArgsInfo)]) -> Self {
+        Self {
+            commands,
+            catchall: None,
+        }
+    }
+
+    pub(crate) const fn new_catchall(catchall: &'static ArgsInfo) -> Self {
+        Self {
+            commands: &[],
+            catchall: Some(catchall),
+        }
+    }
+
+    pub(crate) fn catchall(&self) -> Option<&ArgsInfo> {
+        self.catchall
+    }
+
+    pub(crate) fn commands(&self) -> impl ExactSizeIterator<Item = (&str, &ArgsInfo)> {
+        self.commands.iter().copied()
     }
 }

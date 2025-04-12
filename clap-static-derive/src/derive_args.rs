@@ -115,19 +115,11 @@ struct FieldInfo<'i> {
     effective_ty: &'i syn::Type,
     /// Matching names for named arguments. Empty for unnamed arguments.
     arg_names: Vec<String>,
-    /// Display name of the value.
+    /// Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
+    name_display: String,
+    /// Display string for the value, eg. `CONFIG_FILE`.
     value_display: String,
     require_eq: bool,
-}
-
-impl FieldInfo<'_> {
-    /// The name used for error reporting.
-    fn display_name(&self) -> &str {
-        self.arg_names
-            .first()
-            .map(String::as_str)
-            .unwrap_or(&self.value_display)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,6 +191,9 @@ pub fn expand_state_def_impl<'i>(
 
     for field in input_fields {
         let ident = field.ident.as_ref().expect("checked by darling");
+        let ident_str = ident.to_string();
+        let value_display = heck::AsShoutySnekCase(&ident_str).to_string();
+
         let arg = match &field.attrs {
             ArgOrCommand::Arg(arg) => arg,
             ArgOrCommand::Subcommand => {
@@ -236,12 +231,11 @@ pub fn expand_state_def_impl<'i>(
             ArgTyKind::Convert => (FieldKind::UnwrapOption, &field.ty),
         };
 
-        let field_name_str = ident.to_string();
         let mut arg_names = Vec::new();
         if arg.is_named() {
             // Named arguments.
 
-            let mut value_display = String::new();
+            let mut name_display = String::new();
 
             if arg.last || arg.trailing_var_arg {
                 return Err(Error::new(
@@ -253,8 +247,8 @@ pub fn expand_state_def_impl<'i>(
             if let Some(ch) = &arg.short {
                 let ch = ch
                     .clone()
-                    .unwrap_or_else(|| field_name_str.chars().next().expect("must have name"));
-                value_display = format!("-{ch}");
+                    .unwrap_or_else(|| ident_str.chars().next().expect("must have name"));
+                name_display = format!("-{ch}");
                 arg_names.push(ch.to_string());
             }
             for &short in arg.short_alias.iter() {
@@ -263,12 +257,12 @@ pub fn expand_state_def_impl<'i>(
             if let Some(name) = &arg.long {
                 let long_name = match name {
                     Override::Inherit => {
-                        format!("--{}", heck::AsKebabCase(&field_name_str))
+                        format!("--{}", heck::AsKebabCase(&ident_str))
                     }
                     Override::Explicit(s) => format!("--{s}"),
                 };
                 // Prefer long names for display.
-                value_display = long_name.clone();
+                name_display = long_name.clone();
                 arg_names.push(long_name);
             }
             for long in arg.alias.iter() {
@@ -281,6 +275,7 @@ pub fn expand_state_def_impl<'i>(
                 kind,
                 effective_ty,
                 arg_names,
+                name_display,
                 value_display,
                 require_eq: arg.require_equals,
             });
@@ -290,13 +285,14 @@ pub fn expand_state_def_impl<'i>(
             let value_display = arg
                 .value_name
                 .clone()
-                .unwrap_or_else(|| heck::AsShoutySnakeCase(field_name_str).to_string());
+                .unwrap_or_else(|| heck::AsShoutySnakeCase(ident_str).to_string());
             let is_vec_like = matches!(kind, FieldKind::Vec | FieldKind::OptionVec);
             let info = FieldInfo {
                 ident,
                 kind,
                 effective_ty,
                 arg_names: Vec::new(),
+                name_display: value_display.clone(),
                 value_display,
                 require_eq: false,
             };
@@ -362,7 +358,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         {
             let ident = f.ident;
             let effective_ty = f.effective_ty;
-            let display_name = f.display_name();
+            let name_display = &f.name_display;
             field_names.push(ident);
             match f.kind {
                 FieldKind::BoolSetTrue | FieldKind::Option | FieldKind::UnwrapOption => {
@@ -371,7 +367,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     if f.kind == FieldKind::UnwrapOption {
                         check_missings.extend(quote! {
                             if self.#ident.is_none() {
-                                return __rt::missing_required_arg(#display_name)
+                                return __rt::missing_required_arg(#name_display)
                             }
                         });
                     }
@@ -598,6 +594,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                  arg_names,
                  value_display,
                  require_eq,
+                 kind,
                  ..
              }| {
                 let long_names = arg_names.iter().filter(|s| s.starts_with("--"));
@@ -605,11 +602,18 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                     .iter()
                     .filter(|s| !s.starts_with("--"))
                     .map(|s| format!("-{s}"));
+                let values = match kind {
+                    FieldKind::BoolSetTrue => quote! { [] },
+                    FieldKind::Option
+                    | FieldKind::UnwrapOption
+                    | FieldKind::Vec
+                    | FieldKind::OptionVec => quote! { [#value_display] },
+                };
                 quote! {
                     __rt::refl::NamedArgInfo::__new(
                         &[#(#long_names),*],
                         &[#(#short_names),*],
-                        #value_display,
+                        &#values,
                         #require_eq,
                     )
                 }
@@ -641,9 +645,9 @@ impl ToTokens for ArgsInfoLiteral<'_> {
             }
         };
         let last_arg = match last_field {
-            Some(FieldInfo { value_display, .. }) => quote! {
-                __rt::Some(__rt::refl::UnnamedArgInfo::__new(#value_display))
-            },
+            Some(FieldInfo { value_display, .. }) => {
+                quote! { __rt::Some(__rt::refl::UnnamedArgInfo::__new(#value_display)) }
+            }
             None => quote! { __rt::None },
         };
         let flatten_args =

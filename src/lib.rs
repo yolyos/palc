@@ -8,6 +8,7 @@ use error::ErrorKind;
 use internal::ArgsIter;
 
 mod error;
+mod help;
 mod internal;
 pub mod refl;
 mod values;
@@ -81,7 +82,7 @@ pub trait Parser: Sized + 'static + CommandInternal {
         match Self::try_parse_from(std::env::args_os()) {
             Ok(v) => v,
             Err(err) => {
-                eprintln!("error: {err}");
+                eprintln!("{err}");
                 std::process::exit(1);
             }
         }
@@ -105,6 +106,7 @@ fn try_parse_from_command<C: CommandInternal>(
     let program_name = arg0.file_name().unwrap_or(arg0.as_ref()).to_string_lossy();
     let mut args = ArgsIter::new(iter);
     CommandInternal::try_parse_with_name(&program_name, &mut args)
+        .map_err(|err| err.in_subcommand::<C>(program_name.into_owned()))
 }
 
 /// A group of arguments for composing larger inferface.

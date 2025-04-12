@@ -185,7 +185,7 @@ impl ToTokens for CommandInfoLiteral<'_> {
 
         tokens.extend(quote! {
             __rt::CommandInfo::__new(&[
-                #((__rt::Some(#subcmd_names), &#subargs)),*
+                #((#subcmd_names, &#subargs)),*
             ])
         });
     }

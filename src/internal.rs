@@ -139,7 +139,9 @@ pub fn place_for_subcommand<C: Subcommand>(place: &mut Option<C>) -> FeedUnnamed
             let name = name
                 .to_str()
                 .ok_or_else(|| ErrorKind::InvalidUtf8(name.clone()))?;
-            self.0 = Some(C::try_parse_with_name(name, args)?);
+            let subcmd = C::try_parse_with_name(name, args)
+                .map_err(|err| err.in_subcommand::<C>(name.to_owned()))?;
+            self.0 = Some(subcmd);
             Ok(())
         }
     }
@@ -184,7 +186,7 @@ pub trait CommandInternal: Sized {
 
 /// A common program-name-agnostic command.
 impl<A: Args> CommandInternal for A {
-    const COMMAND_INFO: CommandInfo = CommandInfo::__new(&[(None, &A::__State::ARGS_INFO)]);
+    const COMMAND_INFO: CommandInfo = CommandInfo::new_catchall(&A::__State::ARGS_INFO);
 
     fn try_parse_with_name(_name: &str, args: &mut ArgsIter<'_>) -> Result<Self> {
         try_parse_args(args)
@@ -226,6 +228,10 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                     }
                 },
                 ControlFlow::Continue(()) => {
+                    // TODO: Configurable help?
+                    if name == "h" || name == "--help" {
+                        return Err(ErrorKind::Help.into());
+                    }
                     return Err(ErrorKind::UnknownNamedArgument.with_arg(name));
                 }
             },

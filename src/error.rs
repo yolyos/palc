@@ -1,6 +1,9 @@
 use std::ffi::OsString;
 use std::fmt;
 
+use crate::help::SubcommandPath;
+use crate::internal::CommandInternal;
+
 #[derive(Debug)]
 pub struct Error(Box<Inner>);
 
@@ -8,6 +11,7 @@ pub struct Error(Box<Inner>);
 struct Inner {
     kind: ErrorKind,
     arg: Option<Arg>,
+    subcommand_path: SubcommandPath,
 }
 
 #[derive(Debug)]
@@ -23,6 +27,8 @@ pub(crate) enum ErrorKind {
     InvalidValue(OsString, String),
     MissingArg0,
     MissingEq,
+
+    Help,
 
     Custom(String),
 }
@@ -92,6 +98,12 @@ impl fmt::Display for Error {
                 write!(f, "missing required '=' for argument{maybe_arg}")
             }
 
+            ErrorKind::Help => {
+                let mut out = String::new();
+                crate::help::generate(&self.0.subcommand_path, &mut out).unwrap();
+                f.write_str(&out)
+            }
+
             ErrorKind::Custom(reason) => {
                 if let Some(arg) = &self.0.arg {
                     write!(f, "in {arg}: ")?;
@@ -112,6 +124,11 @@ impl Error {
         self.0.arg = Some(Arg(arg.into()));
         self
     }
+
+    pub(crate) fn in_subcommand<C: CommandInternal>(mut self, name: String) -> Self {
+        self.0.subcommand_path.push((name, C::COMMAND_INFO));
+        self
+    }
 }
 
 impl From<ErrorKind> for Error {
@@ -119,6 +136,7 @@ impl From<ErrorKind> for Error {
         Self(Box::new(Inner {
             arg: None,
             kind: repr,
+            subcommand_path: Vec::new(),
         }))
     }
 }
