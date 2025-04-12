@@ -4,7 +4,7 @@ use syn::spanned::Spanned;
 use syn::{DeriveInput, Error, Ident, Visibility};
 
 use crate::common::{
-    ArgOrCommand, ArgTyKind, ArgsCommandMeta, ErrorCollector, Override, TY_OPTION,
+    ArgOrCommand, ArgTyKind, ArgsCommandMeta, Doc, ErrorCollector, Override, TY_OPTION,
     parse_args_attrs, strip_ty_ctor, wrap_anon_item,
 };
 
@@ -104,6 +104,7 @@ pub struct ParserStateDefImpl<'i> {
 
 struct FieldInfo<'i> {
     ident: &'i Ident,
+    doc: Doc,
     kind: FieldKind,
     /// The type used for parser inference, with `Option`/`Vec` stripped.
     effective_ty: &'i syn::Type,
@@ -186,7 +187,7 @@ pub fn expand_state_def_impl<'i>(
         last_field: None,
     };
 
-    for (field, attrs) in input_fields.iter().zip(&field_attrs) {
+    for (field, attrs) in input_fields.iter().zip(field_attrs) {
         let ident = field.ident.as_ref().expect("named struct");
         let ident_str = ident.to_string();
         let value_display = heck::AsShoutySnekCase(&ident_str).to_string();
@@ -272,6 +273,7 @@ pub fn expand_state_def_impl<'i>(
 
             out.named_fields.push(FieldInfo {
                 ident,
+                doc: arg.doc,
                 kind,
                 effective_ty,
                 arg_names,
@@ -289,6 +291,7 @@ pub fn expand_state_def_impl<'i>(
             let is_vec_like = matches!(kind, FieldKind::Vec | FieldKind::OptionVec);
             let info = FieldInfo {
                 ident,
+                doc: arg.doc,
                 kind,
                 effective_ty,
                 arg_names: Vec::new(),
@@ -598,6 +601,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                  value_display,
                  require_eq,
                  kind,
+                 doc,
                  ..
              }| {
                 let long_names = arg_names.iter().filter(|s| s.starts_with("--"));
@@ -614,6 +618,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                 };
                 quote! {
                     __rt::refl::NamedArgInfo::__new(
+                        #doc,
                         &[#(#long_names),*],
                         &[#(#short_names),*],
                         &#values,
@@ -622,11 +627,13 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                 }
             },
         );
-        let unnamed_args = unnamed_fields
-            .iter()
-            .map(|FieldInfo { value_display, .. }| {
-                quote! { __rt::refl::UnnamedArgInfo::__new(#value_display) }
-            });
+        let unnamed_args = unnamed_fields.iter().map(
+            |FieldInfo {
+                 doc, value_display, ..
+             }| {
+                quote! { __rt::refl::UnnamedArgInfo::__new(#doc, #value_display) }
+            },
+        );
         let mut trailing_var_arg = quote! { __rt::None };
         let mut subcmd = trailing_var_arg.clone();
         match catchall_field {
@@ -641,15 +648,18 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                 };
             }
             Some(CatchallFieldInfo::VecLike { greedy, field }) => {
+                let doc = &field.doc;
                 let value_display = &field.value_display;
                 trailing_var_arg = quote! {
-                    Some((#greedy, __rt::refl::UnnamedArgInfo::__new(#value_display)))
+                    Some((#greedy, __rt::refl::UnnamedArgInfo::__new(#doc, #value_display)))
                 }
             }
         };
         let last_arg = match last_field {
-            Some(FieldInfo { value_display, .. }) => {
-                quote! { __rt::Some(__rt::refl::UnnamedArgInfo::__new(#value_display)) }
+            Some(FieldInfo {
+                doc, value_display, ..
+            }) => {
+                quote! { __rt::Some(__rt::refl::UnnamedArgInfo::__new(#doc, #value_display)) }
             }
             None => quote! { __rt::None },
         };

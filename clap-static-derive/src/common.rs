@@ -137,10 +137,12 @@ pub fn parse_args_attrs(fields: &syn::FieldsNamed) -> syn::Result<Vec<ArgOrComma
 impl ArgOrCommand {
     fn parse_attrs(attrs: &[Attribute]) -> syn::Result<ArgOrCommand> {
         let mut errs = ErrorCollector::default();
+        let mut doc = Doc::default();
         let mut arg = None::<ArgMeta>;
         let mut command = None;
         for attr in attrs {
             let path = attr.path();
+            doc.extend_from_attr(attr)?;
             if path.is_ident("arg") {
                 let arg = arg.get_or_insert_default();
                 errs.collect(attr.parse_nested_meta(|meta| arg.parse_update(meta)));
@@ -153,13 +155,16 @@ impl ArgOrCommand {
                 }
             }
         }
+        doc.post_process();
         let ret = if let Some((span, c)) = command {
             if arg.is_some() {
                 errs.push(syn::Error::new(span, "command(..) conflicts with arg(..)"));
             }
             Self::Command(c)
         } else {
-            Self::Arg(arg.unwrap_or_default())
+            let mut arg = arg.unwrap_or_default();
+            arg.doc = doc;
+            Self::Arg(arg)
         };
         errs.finish_then(ret)
     }
@@ -167,6 +172,8 @@ impl ArgOrCommand {
 
 #[derive(Default)]
 pub struct ArgMeta {
+    pub doc: Doc,
+
     // Names.
     pub long: Option<Override<String>>,
     pub short: Option<Override<char>>,
@@ -369,5 +376,58 @@ impl<T: Parse> Parse for Override<T> {
         } else {
             Self::Inherit
         })
+    }
+}
+
+/// Collect doc-comments into a single string.
+///
+/// Paragraph (consecutive doc-comments without blank lines) are joined with space. In the result,
+/// the first line is the summary, and each of rest lines corresponds to a paragraph.
+///
+/// See `src/refl.rs` for runtime usage that depends on this.
+#[derive(Default)]
+pub struct Doc(String);
+
+impl Doc {
+    fn post_process(&mut self) {
+        let len = self.0.trim_ascii_end().len();
+        self.0.truncate(len);
+    }
+
+    fn extend_from_attr(&mut self, attr: &Attribute) -> syn::Result<()> {
+        if attr.path().is_ident("doc") {
+            if let syn::Meta::NameValue(m) = &attr.meta {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) = &m.value
+                {
+                    let s = s.value();
+                    let s = s.trim_ascii();
+                    if s.is_empty() {
+                        if !self.0.ends_with("\n") {
+                            self.0.push('\n');
+                        }
+                    } else {
+                        if !self.0.is_empty() && !self.0.ends_with("\n") {
+                            self.0.push(' ');
+                        }
+                        self.0.push_str(s);
+                    }
+                } else {
+                    return Err(syn::Error::new(
+                        m.value.span(),
+                        "only literal doc comment is supported yet",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl ToTokens for Doc {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.0.to_tokens(tokens);
     }
 }

@@ -152,12 +152,14 @@ pub struct NamedArgInfo {
     short_names: &'static [&'static str],
     value_display: &'static [&'static str],
     require_eq: bool,
+    doc: &'static str,
 }
 
 impl NamedArgInfo {
     // NB. Used by proc-macro.
     #[doc(hidden)]
     pub const fn __new(
+        doc: &'static str,
         long_names: &'static [&'static str],
         short_names: &'static [&'static str],
         value_display: &'static [&'static str],
@@ -168,6 +170,7 @@ impl NamedArgInfo {
             short_names,
             value_display,
             require_eq,
+            doc,
         }
     }
 
@@ -186,22 +189,31 @@ impl NamedArgInfo {
     pub fn requires_eq(&self) -> bool {
         self.require_eq
     }
+
+    pub fn doc(&self) -> Option<Doc> {
+        Doc::from_raw(self.doc)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct UnnamedArgInfo {
     value_display: &'static str,
+    doc: &'static str,
 }
 
 impl UnnamedArgInfo {
     // NB. Used by proc-macro.
     #[doc(hidden)]
-    pub const fn __new(value_display: &'static str) -> Self {
-        Self { value_display }
+    pub const fn __new(doc: &'static str, value_display: &'static str) -> Self {
+        Self { value_display, doc }
     }
 
     pub fn value_display(&self) -> &str {
         self.value_display
+    }
+
+    pub fn doc(&self) -> Option<Doc> {
+        Doc::from_raw(self.doc)
     }
 }
 
@@ -234,5 +246,25 @@ impl CommandInfo {
 
     pub(crate) fn commands(&self) -> impl ExactSizeIterator<Item = (&str, &ArgsInfo)> {
         self.commands.iter().copied()
+    }
+}
+
+// See `clap-static-derive/src/common.rs` for proc-macro pre-processing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Doc {
+    doc: &'static str,
+}
+
+impl Doc {
+    fn from_raw(doc: &'static str) -> Option<Self> {
+        (!doc.is_empty()).then_some(Self { doc })
+    }
+
+    pub fn summary(&self) -> &str {
+        self.all_paragraphs().next().unwrap_or(self.doc)
+    }
+
+    pub fn all_paragraphs(&self) -> impl Iterator<Item = &str> {
+        self.doc.lines()
     }
 }

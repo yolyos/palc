@@ -58,10 +58,28 @@ fn generate_for_args(info: &ArgsInfo, out: &mut String) -> std::fmt::Result {
     }
     writeln!(out)?;
 
+    if let Some((_, cmd_info)) = info.subcommand() {
+        writeln!(out, "\nCommands:")?;
+        for (cmd, _) in cmd_info.commands() {
+            writeln!(out, "    {cmd}")?;
+        }
+    }
+
     if has_unnamed {
         writeln!(out, "\nArguments:")?;
-        for arg in info.unnamed_args() {
+        for (i, arg) in info.unnamed_args().enumerate() {
+            if i > 0 {
+                writeln!(out)?;
+            }
             writeln!(out, "  <{}>", arg.value_display())?;
+            if let Some(doc) = arg.doc() {
+                for (i, s) in doc.all_paragraphs().enumerate() {
+                    if i > 0 {
+                        writeln!(out)?;
+                    }
+                    writeln!(out, "          {s}")?;
+                }
+            }
         }
     }
 
@@ -75,14 +93,24 @@ fn generate_for_args(info: &ArgsInfo, out: &mut String) -> std::fmt::Result {
                 (Some(short), None) => write!(out, "  {short}"),
                 (Some(short), Some(long)) => write!(out, "  {short}, {long}"),
             }?;
+            match arg.value_display() {
+                [] => {}
+                [v] => {
+                    let sep = if arg.requires_eq() { "=" } else { " " };
+                    write!(out, "{sep}<{v}>")?;
+                }
+                _ => todo!(),
+            }
             writeln!(out)?;
-        }
-    }
-
-    if let Some((_, cmd_info)) = info.subcommand() {
-        writeln!(out, "\nCommands:")?;
-        for (cmd, _) in cmd_info.commands() {
-            writeln!(out, "    {cmd}")?;
+            if let Some(doc) = arg.doc() {
+                for (i, s) in doc.all_paragraphs().enumerate() {
+                    if i != 0 {
+                        writeln!(out)?;
+                    }
+                    writeln!(out, "          {s}")?;
+                }
+            }
+            writeln!(out)?;
         }
     }
 
