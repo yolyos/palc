@@ -505,20 +505,26 @@ impl ToTokens for ParserStateDefImpl<'_> {
         {
             quote!()
         } else {
-            // FIXME: This is O(n) on each call.
-            let mut body = unnamed_fields
-                .iter()
-                .map(|f| {
-                    let name = f.ident;
-                    let parsed = value_parsed(f.effective_ty);
-                    quote! {
-                        if self.#name.is_none() {
-                            self.#name = __rt::Some(#parsed);
-                            return __rt::Ok(__rt::None);
-                        }
+            let asserts = flatten_fields.iter().map(|f| {
+                let ty = f.effective_ty;
+                quote_spanned! {ty.span()=>
+                    const {
+                        __rt::assert!(
+                            <<#ty as __rt::ArgsInternal>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
+                            "TODO: cannot arg(flatten) positional arguments yet",
+                        );
                     }
-                })
-                .collect::<TokenStream>();
+                }
+            }).collect::<TokenStream>();
+
+            let mut arms = TokenStream::new();
+            for (idx, f) in unnamed_fields.iter().enumerate() {
+                let name = f.ident;
+                let parsed = value_parsed(f.effective_ty);
+                arms.extend(quote! {
+                    #idx => self.#name = __rt::Some(#parsed),
+                });
+            }
 
             let catchall = if let Some(f) = catchall_field {
                 match f {
@@ -532,14 +538,25 @@ impl ToTokens for ParserStateDefImpl<'_> {
                             quote! { __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info) }
                         } else {
                             let parsed = value_parsed(field.effective_ty);
-                            quote! { self.#ident.get_or_insert_default().push(#parsed); __rt::Ok(__rt::None) }
+                            quote! {{ self.#ident.get_or_insert_default().push(#parsed); __rt::Ok(__rt::None) }}
                         }
                     }
                 }
             } else {
                 quote! { __rt::Err(__rt::None) }
             };
-            body.extend(catchall);
+
+            let non_last = if arms.is_empty() {
+                catchall
+            } else {
+                quote! {
+                    match __idx {
+                        #arms
+                        _ => return #catchall
+                    }
+                    __rt::Ok(__rt::None)
+                }
+            };
 
             let handle_last = if let Some(f) = last_field {
                 let ident = f.ident;
@@ -554,12 +571,21 @@ impl ToTokens for ParserStateDefImpl<'_> {
             };
 
             quote! {
-                fn feed_unnamed(&mut self, __arg: &mut __rt::OsString, __is_last: bool) -> __rt::FeedUnnamed {
+                fn feed_unnamed(
+                    &mut self,
+                    __arg: &mut __rt::OsString,
+                    __idx: __rt::usize,
+                    __is_last: __rt::bool,
+                ) -> __rt::FeedUnnamed {
+                    #asserts
                     #handle_last
-                    #body
+                    #non_last
                 }
             }
         };
+
+        let self_unnamed_arg_cnt = unnamed_fields.len();
+        let flatten_tys = flatten_fields.iter().map(|f| f.effective_ty);
 
         let args_info_lit = ArgsInfoLiteral(self);
 
@@ -575,6 +601,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
             impl __rt::ParserState for #state_name {
                 type Output = #output_ty;
                 const ARGS_INFO: __rt::ArgsInfo = #args_info_lit;
+                const TOTAL_UNNAMED_ARG_CNT: __rt::usize =
+                    #self_unnamed_arg_cnt #(+ <<#flatten_tys as __rt::ArgsInternal>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
                 fn init() -> Self {
                     Self {

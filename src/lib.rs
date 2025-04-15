@@ -28,8 +28,8 @@ pub mod __private {
     pub use std::borrow::Cow;
     use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
-    pub use std::{concat, env, unimplemented};
-    pub use {Default, Err, Iterator, None, Ok, Option, Some, Vec, char, str, usize};
+    pub use std::{assert, concat, env, unimplemented};
+    pub use {Default, Err, Iterator, None, Ok, Option, Some, Vec, bool, char, str, usize};
 
     // Used by `arg_value_info!`
     pub use crate::arg_value_info;
@@ -51,6 +51,7 @@ pub mod __private {
     impl<T: 'static> ParserState for FallbackState<T> {
         type Output = T;
         const ARGS_INFO: ArgsInfo = ArgsInfo::empty();
+        const TOTAL_UNNAMED_ARG_CNT: usize = 0;
         fn init() -> Self {
             unimplemented!()
         }

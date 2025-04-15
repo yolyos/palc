@@ -163,17 +163,22 @@ pub trait ArgsInternal: Sized + 'static {
 pub trait ParserState: ParserStateDyn {
     type Output;
     const ARGS_INFO: ArgsInfo;
+    const TOTAL_UNNAMED_ARG_CNT: usize;
 
     fn init() -> Self;
     fn finish(self) -> Result<Self::Output>;
 }
 
 pub trait ParserStateDyn: 'static {
-    fn feed_named(&mut self, _name: &str) -> FeedNamed<'_> {
+    fn feed_named(&mut self, name: &str) -> FeedNamed<'_> {
+        let _ = name;
         ControlFlow::Continue(())
     }
 
-    fn feed_unnamed(&mut self, _arg: &mut OsString, _is_last: bool) -> FeedUnnamed {
+    /// `idx` is the index of logical arguments, counting each multi-value-argument as one.
+    /// `is_last` indices if a `--` has been encountered. It does not effect `idx`.
+    fn feed_unnamed(&mut self, arg: &mut OsString, idx: usize, is_last: bool) -> FeedUnnamed {
+        let _ = (arg, idx, is_last);
         Err(None)
     }
 }
@@ -200,13 +205,14 @@ pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>) -> Result<A> {
 }
 
 pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<'_>) -> Result<()> {
+    let mut idx = 0usize;
     while let Some(arg) = args.cache_next_arg()? {
         match arg {
             Arg::DashDash => {
                 drop(arg);
                 for mut arg in &mut args.iter {
-                    match state.feed_unnamed(&mut arg, true) {
-                        Ok(None) => {}
+                    match state.feed_unnamed(&mut arg, idx, true) {
+                        Ok(None) => idx += 1,
                         Ok(Some(place)) => return place.feed_greedy(arg, args),
                         Err(Some(err)) => return Err(err),
                         Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
@@ -236,8 +242,8 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                     return Err(ErrorKind::UnknownNamedArgument.with_arg(name));
                 }
             },
-            Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, false) {
-                Ok(None) => {}
+            Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, idx, false) {
+                Ok(None) => idx += 1,
                 Ok(Some(place)) => return place.feed_greedy(arg, args),
                 Err(Some(err)) => return Err(err),
                 Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
