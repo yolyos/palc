@@ -114,6 +114,8 @@ pub struct ParserStateDefImpl<'i> {
     catchall_field: Option<CatchallFieldInfo<'i>>,
     last_field: Option<FieldInfo<'i>>,
     flatten_fields: Vec<FlattenFieldInfo<'i>>,
+    validations: Vec<Validation<'i>>,
+
     cmd_attrs: Option<TopCommandMeta>,
 }
 
@@ -126,8 +128,6 @@ struct FieldInfo<'i> {
     finish: FieldFinish,
     /// Matching names for named arguments. Empty for unnamed arguments.
     arg_names: Vec<String>,
-    /// Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
-    name_display: String,
     /// Display string for the value, eg. `CONFIG_FILE`.
     value_display: String,
     require_eq: bool,
@@ -198,6 +198,28 @@ impl ToTokens for FieldFinish {
     }
 }
 
+enum Validation<'i> {
+    ArgRequired(&'i Ident, String),
+    SubcommandRequired(&'i Ident),
+}
+
+impl ToTokens for Validation<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(match self {
+            Validation::ArgRequired(ident, display) => quote! {
+                if self.#ident.is_none() {
+                    return __rt::missing_required_arg(#display)
+                }
+            },
+            Validation::SubcommandRequired(ident) => quote! {
+                if self.#ident.is_none() {
+                    return __rt::missing_required_subcmd()
+                }
+            },
+        });
+    }
+}
+
 pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
     cmd_attrs: Option<TopCommandMeta>,
@@ -220,6 +242,7 @@ pub fn expand_state_def_impl<'i>(
         flatten_fields: Vec::with_capacity(input_fields.len()),
         catchall_field: None,
         last_field: None,
+        validations: Vec::new(),
         cmd_attrs,
     };
 
@@ -235,6 +258,9 @@ pub fn expand_state_def_impl<'i>(
                     Some(subty) => (true, subty),
                     None => (false, &field.ty),
                 };
+                if !optional {
+                    out.validations.push(Validation::SubcommandRequired(ident));
+                }
                 let info = CatchallFieldInfo::Subcommand {
                     ident,
                     effective_ty,
@@ -267,6 +293,8 @@ pub fn expand_state_def_impl<'i>(
             ArgTyKind::Option(subty) => (FieldKind::Option, subty, FieldFinish::Id),
             ArgTyKind::Other => (FieldKind::Option, &field.ty, FieldFinish::UnwrapChecked),
         };
+
+        // Default values.
         if let Some(expr) = arg.default_value.take() {
             if arg.default_value_t.is_some() {
                 errs.push(syn::Error::new(
@@ -294,11 +322,14 @@ pub fn expand_state_def_impl<'i>(
             }
         }
 
-        let mut arg_names = Vec::new();
+        let is_unwrap_checked = matches!(finish, FieldFinish::UnwrapChecked);
+        // Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
+        let mut name_display = String::new();
+
         if arg.is_named() {
             // Named arguments.
 
-            let mut name_display = String::new();
+            let mut arg_names = Vec::new();
 
             if arg.last || arg.trailing_var_arg {
                 errs.push(Error::new(
@@ -342,7 +373,6 @@ pub fn expand_state_def_impl<'i>(
                 effective_ty,
                 finish,
                 arg_names,
-                name_display,
                 value_display,
                 require_eq: arg.require_equals,
                 global: arg.global,
@@ -370,6 +400,7 @@ pub fn expand_state_def_impl<'i>(
                 .value_name
                 .clone()
                 .unwrap_or_else(|| heck::AsShoutySnakeCase(ident_str).to_string());
+            name_display = value_display.clone();
             let is_vec_like = matches!(kind, FieldKind::OptionVec);
             let info = FieldInfo {
                 ident,
@@ -378,7 +409,6 @@ pub fn expand_state_def_impl<'i>(
                 effective_ty,
                 finish,
                 arg_names: Vec::new(),
-                name_display: value_display.clone(),
                 value_display,
                 require_eq: false,
                 global: false,
@@ -411,6 +441,12 @@ pub fn expand_state_def_impl<'i>(
                 out.unnamed_fields.push(info);
             }
         }
+
+        // Validations.
+        if is_unwrap_checked {
+            out.validations
+                .push(Validation::ArgRequired(ident, name_display));
+        }
     }
 
     Ok(out)
@@ -428,6 +464,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
             catchall_field,
             last_field,
             flatten_fields,
+            validations,
             ..
         } = self;
         let output_ctor = output_ctor.as_ref().unwrap_or(&self.output_ty);
@@ -442,7 +479,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let mut field_tys = Vec::new();
         let mut field_inits = Vec::new();
         let mut field_finishes = Vec::new();
-        let mut check_missings = TokenStream::new();
         for f in named_fields
             .iter()
             .chain(unnamed_fields)
@@ -450,15 +486,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         {
             let ident = f.ident;
             let effective_ty = f.effective_ty;
-            let name_display = &f.name_display;
             field_names.push(ident);
-            if matches!(f.finish, FieldFinish::UnwrapChecked) {
-                check_missings.extend(quote! {
-                    if self.#ident.is_none() {
-                        return __rt::missing_required_arg(#name_display)
-                    }
-                });
-            }
             match f.kind {
                 FieldKind::Option | FieldKind::BoolSetTrue => {
                     field_tys.push(quote! { __rt::Option<#effective_ty> });
@@ -485,11 +513,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 let tail = if *optional {
                     quote!()
                 } else {
-                    check_missings.extend(quote! {
-                        if self.#ident.is_none() {
-                            return __rt::missing_required_subcmd()
-                        }
-                    });
                     quote! { .unwrap() }
                 };
                 field_finishes.push(quote! { self.#ident #tail });
@@ -705,7 +728,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 }
 
                 fn finish(self) -> __rt::Result<Self::Output> {
-                    #check_missings
+                    #(#validations)*
                     __rt::Ok(#output_ctor {
                         #(#field_names : #field_finishes,)*
                     })
