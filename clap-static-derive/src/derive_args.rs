@@ -132,6 +132,8 @@ struct FieldInfo<'i> {
     value_display: String,
     require_eq: bool,
     global: bool,
+
+    hide: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -344,6 +346,7 @@ pub fn expand_state_def_impl<'i>(
                 value_display,
                 require_eq: arg.require_equals,
                 global: arg.global,
+                hide: arg.hide,
             });
         } else {
             // Unamed arguments.
@@ -379,6 +382,7 @@ pub fn expand_state_def_impl<'i>(
                 value_display,
                 require_eq: false,
                 global: false,
+                hide: arg.hide,
             };
 
             if arg.last {
@@ -738,7 +742,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
             ..
         } = self.0;
 
-        let named_args = named_fields.iter().map(
+        let named_args = named_fields.iter().filter(|f| !f.hide).map(
             |FieldInfo {
                  arg_names,
                  value_display,
@@ -767,7 +771,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                 }
             },
         );
-        let unnamed_args = unnamed_fields.iter().map(
+        let unnamed_args = unnamed_fields.iter().filter(|f| !f.hide).map(
             |FieldInfo {
                  doc, value_display, ..
              }| {
@@ -777,7 +781,6 @@ impl ToTokens for ArgsInfoLiteral<'_> {
         let mut trailing_var_arg = quote! { __rt::None };
         let mut subcmd = trailing_var_arg.clone();
         match catchall_field {
-            None => {}
             Some(CatchallFieldInfo::Subcommand {
                 effective_ty,
                 optional,
@@ -787,21 +790,25 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                     Some((#optional, <#effective_ty as __rt::CommandInternal>::COMMAND_INFO))
                 };
             }
-            Some(CatchallFieldInfo::VecLike { greedy, field }) => {
+            Some(CatchallFieldInfo::VecLike { greedy, field }) if !field.hide => {
                 let doc = &field.doc;
                 let value_display = &field.value_display;
                 trailing_var_arg = quote! {
                     Some((#greedy, __rt::refl::UnnamedArgInfo::__new(#doc, #value_display)))
                 }
             }
+            _ => {}
         };
         let last_arg = match last_field {
             Some(FieldInfo {
-                doc, value_display, ..
-            }) => {
+                hide,
+                doc,
+                value_display,
+                ..
+            }) if !hide => {
                 quote! { __rt::Some(__rt::refl::UnnamedArgInfo::__new(#doc, #value_display)) }
             }
-            None => quote! { __rt::None },
+            _ => quote! { __rt::None },
         };
         let flatten_args =
             flatten_fields

@@ -201,7 +201,8 @@ pub struct ArgMeta {
     // Help & completion.
     pub help: Option<String>,
     pub long_help: Option<String>,
-    // TODO: add, hide*, next_line_help, help_heading, display_order
+    pub hide: bool,
+    // TODO: add, hide_*, next_line_help, help_heading, display_order
 
     // Validation.
     // TODO: exclusive, requires, default_value_if{,s}, required_unless_present*, required_if*,
@@ -296,6 +297,9 @@ impl ArgMeta {
         } else if path.is_ident("long_help") {
             check_dup!(long_help);
             self.help = Some(meta.value()?.parse::<LitStr>()?.value());
+        } else if path.is_ident("hide") {
+            check_true!();
+            self.hide = true;
         } else {
             if cfg!(feature = "__test-allow-unknown-fields") {
                 if meta.input.peek(Token![=]) {
