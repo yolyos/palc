@@ -125,5 +125,9 @@ pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Res
         }
     }
 
+    if let Some(after) = app.after_help() {
+        out.write_str(after)?;
+    }
+
     Ok(())
 }

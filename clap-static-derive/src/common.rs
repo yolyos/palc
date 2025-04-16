@@ -341,6 +341,8 @@ pub struct TopCommandMeta {
     pub author: Option<Override<syn::Expr>>,
     pub about: Option<Override<syn::Expr>>,
     pub long_about: Option<Override<syn::Expr>>,
+    pub after_help: Option<syn::Expr>,
+    pub after_long_help: Option<syn::Expr>,
     // TODO: verbatim_doc_comment, next_display_order, next_help_heading, rename_all{,_env}
 }
 
@@ -380,6 +382,10 @@ impl TopCommandMeta {
             parse_unique_override(&mut self.about, &meta)?;
         } else if path.is_ident("long_about") {
             parse_unique_override(&mut self.long_about, &meta)?;
+        } else if path.is_ident("after_help") {
+            self.after_help = Some(meta.value()?.parse()?);
+        } else if path.is_ident("after_long_help") {
+            self.after_long_help = Some(meta.value()?.parse()?);
         } else {
             if cfg!(feature = "__test-allow-unknown-fields") {
                 if meta.input.peek(Token![=]) {

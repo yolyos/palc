@@ -838,6 +838,8 @@ impl ToTokens for AppInfoLiteral<'_> {
             author,
             about,
             long_about,
+            after_help,
+            after_long_help,
         }) = self.0
         else {
             tokens.extend(quote! { __rt::None });
@@ -868,6 +870,14 @@ impl ToTokens for AppInfoLiteral<'_> {
             Some(Override::Inherit) => doc.to_token_stream(),
             None => quote! { "" },
         };
+        let after_help = match after_help {
+            Some(e) => quote! { #e },
+            None => quote! { "" },
+        };
+        let after_long_help = match after_long_help {
+            Some(e) => quote! { #e },
+            None => quote! { "" },
+        };
 
         tokens.extend(quote! {
             // Force promote in case of any arguments referencing statics.
@@ -878,6 +888,8 @@ impl ToTokens for AppInfoLiteral<'_> {
                     #author,
                     #about,
                     #long_about,
+                    #after_help,
+                    #after_long_help,
                 )
             })
         });

@@ -14,6 +14,8 @@ pub struct AppInfo {
     author: Option<&'static str>,
     about: Option<&'static str>,
     long_about: Option<&'static str>,
+    after_help: Option<&'static str>,
+    after_long_help: Option<&'static str>,
 }
 
 impl AppInfo {
@@ -25,6 +27,8 @@ impl AppInfo {
         author: &'static str,
         about: &'static str,
         long_about: &'static str,
+        after_help: &'static str,
+        after_long_help: &'static str,
     ) -> Self {
         // Workaround: `bool::then_some` is not a const fn.
         macro_rules! opt {
@@ -38,11 +42,11 @@ impl AppInfo {
             author: opt!(author),
             about: opt!(about),
             long_about: opt!(long_about),
+            after_help: opt!(after_help),
+            after_long_help: opt!(after_long_help),
         }
     }
-}
 
-impl AppInfo {
     pub fn name(&self) -> &'static str {
         self.name
     }
@@ -60,6 +64,14 @@ impl AppInfo {
             summary: self.about.unwrap_or(""),
             full: self.long_about.unwrap_or(""),
         }
+    }
+
+    pub fn after_help(&self) -> Option<&'static str> {
+        self.after_help
+    }
+
+    pub fn after_long_help(&self) -> Option<&'static str> {
+        self.after_long_help.or(self.after_help)
     }
 }
 
