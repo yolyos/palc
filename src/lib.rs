@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -5,7 +6,7 @@ use crate::internal::{ArgsInternal, CommandInternal};
 
 pub use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 use error::ErrorKind;
-use internal::ArgsIter;
+use internal::{ArgsIter, GlobalAncestors};
 
 mod error;
 mod internal;
@@ -26,10 +27,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[doc(hidden)]
 pub mod __private {
     pub use std::borrow::Cow;
-    use std::convert::Infallible;
+    pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
-    pub use std::{assert, concat, env, unimplemented};
-    pub use {Default, Err, Iterator, None, Ok, Option, Some, Vec, bool, char, str, usize};
+    pub use std::{assert, concat, env, unimplemented, unreachable};
+    pub use {Default, Err, Fn, Iterator, None, Ok, Option, Some, Vec, bool, char, str, usize};
 
     // Used by `arg_value_info!`
     pub use crate::arg_value_info;
@@ -37,11 +38,7 @@ pub mod __private {
     pub use std::marker::PhantomData;
 
     use crate::ErrorKind;
-    pub use crate::internal::{
-        ArgsInternal, ArgsIter, CommandInternal, FeedNamed, FeedUnnamed, ParserState,
-        ParserStateDyn, place_for_flag, place_for_set_value, place_for_subcommand,
-        place_for_trailing_var_arg, place_for_vec, try_parse_args, try_parse_with_state,
-    };
+    pub use crate::internal::*;
     pub use crate::refl::{self, ArgsInfo, CommandInfo};
     pub use crate::{Args, Parser, Result, Subcommand};
 
@@ -50,6 +47,7 @@ pub mod __private {
 
     impl<T: 'static> ParserState for FallbackState<T> {
         type Output = T;
+        type Subcommand = Infallible;
         const ARGS_INFO: ArgsInfo = ArgsInfo::empty();
         const TOTAL_UNNAMED_ARG_CNT: usize = 0;
         fn init() -> Self {
@@ -57,6 +55,9 @@ pub mod __private {
         }
         fn finish(self) -> Result<Self::Output> {
             match self {}
+        }
+        fn subcommand_getter() -> impl Fn(&mut Self) -> &mut Option<Self::Subcommand> {
+            |_| unreachable!()
         }
     }
     impl<T: 'static> ParserStateDyn for FallbackState<T> {}
@@ -108,7 +109,7 @@ fn try_parse_from_command<C: CommandInternal>(
     // A non-UTF8 program name does not matter in help. Multi-call commands will fail anyway.
     let program_name = arg0.file_name().unwrap_or(arg0.as_ref()).to_string_lossy();
     let mut args = ArgsIter::new(iter);
-    CommandInternal::try_parse_with_name(&program_name, &mut args)
+    CommandInternal::try_parse_with_name(&program_name, &mut args, &mut ())
         .map_err(|err| err.in_subcommand::<C>(program_name.into_owned()))
 }
 
@@ -117,3 +118,17 @@ pub trait Args: Sized + 'static + ArgsInternal {}
 
 /// A subcommand enum.
 pub trait Subcommand: Sized + 'static + CommandInternal {}
+
+impl CommandInternal for Infallible {
+    const COMMAND_INFO: refl::CommandInfo = refl::CommandInfo::__new(&[]);
+
+    fn try_parse_with_name(
+        name: &str,
+        _args: &mut ArgsIter<'_>,
+        _global: GlobalAncestors<'_>,
+    ) -> Result<Self> {
+        Err(ErrorKind::UnknownSubcommand(name.into()).into())
+    }
+}
+
+impl Subcommand for Infallible {}

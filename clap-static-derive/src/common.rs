@@ -184,7 +184,7 @@ pub struct ArgMeta {
 
     // Named argument behaviors.
     pub require_equals: bool,
-    // TODO: global
+    pub global: bool,
 
     // Unnamed argument behaviors.
     pub trailing_var_arg: bool,
@@ -274,6 +274,9 @@ impl ArgMeta {
         } else if path.is_ident("require_equals") {
             check_true!();
             self.require_equals = true;
+        } else if path.is_ident("global") {
+            check_true!();
+            self.global = true;
         } else if path.is_ident("trailing_var_arg") {
             check_true!();
             self.trailing_var_arg = true;

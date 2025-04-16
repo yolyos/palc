@@ -19,6 +19,7 @@ pub(crate) fn expand(input: DeriveInput) -> TokenStream {
             fn try_parse_with_name(
                 __name: &__rt::str,
                 __args: &mut __rt::ArgsIter<'_>,
+                __global: __rt::GlobalAncestors<'_>,
             ) -> __rt::Result<Self> {
                 __rt::unimplemented!()
             }
@@ -53,11 +54,11 @@ impl ToTokens for VariantImpl<'_> {
                 __rt::Ok(Self::#variant_name)
             },
             VariantImpl::Tuple { variant_name, ty } => quote! {
-                __rt::try_parse_args::<#ty>(__args).map(Self::#variant_name)
+                __rt::try_parse_args::<#ty>(__args, __global).map(Self::#variant_name)
             },
             VariantImpl::Struct { state_name } => quote! {{
                 let mut __state = <#state_name as __rt::ParserState>::init();
-                __rt::try_parse_with_state(&mut __state, __args)?;
+                __rt::try_parse_with_state(&mut __state, __args, __global)?;
                 __rt::ParserState::finish(__state)
             }},
         })
@@ -153,6 +154,7 @@ impl ToTokens for SubcommandImpl<'_> {
                 fn try_parse_with_name(
                     __name: &__rt::str,
                     __args: &mut __rt::ArgsIter<'_>,
+                    __global: __rt::GlobalAncestors<'_>,
                 ) -> __rt::Result<Self> {
                     match __name {
                         #(#name_strs => #cases,)*

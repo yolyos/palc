@@ -9,7 +9,7 @@ struct MyCli {
     #[command(flatten)]
     config: Config,
 
-    #[arg(short = 'v')]
+    #[arg(short = 'v', global = true)]
     debug: bool,
 
     #[arg(long, require_equals = true)]
@@ -54,6 +54,7 @@ fn smoke() {
         "bar",
         "test",
         "-l",
+        "-v",
         "hello",
         "world",
     ])
@@ -67,7 +68,7 @@ fn smoke() {
                 config_file: None,
                 config: Some("foo".into())
             },
-            debug: false,
+            debug: true,
             command: Some(Commands::Test {
                 list: true,
                 files: Some(vec![PathBuf::from("hello"), PathBuf::from("world")]),

@@ -130,6 +130,7 @@ struct FieldInfo<'i> {
     /// Display string for the value, eg. `CONFIG_FILE`.
     value_display: String,
     require_eq: bool,
+    global: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,7 +257,7 @@ pub fn expand_state_def_impl<'i>(
             if arg.last || arg.trailing_var_arg {
                 errs.push(Error::new(
                     field.ty.span(),
-                    "arg(last, trailing_var_arg) must be used on positional arguments",
+                    "arg(last, trailing_var_arg) only support positional arguments",
                 ));
                 continue;
             }
@@ -297,9 +298,18 @@ pub fn expand_state_def_impl<'i>(
                 name_display,
                 value_display,
                 require_eq: arg.require_equals,
+                global: arg.global,
             });
         } else {
             // Unamed arguments.
+
+            if arg.require_equals || arg.global {
+                errs.push(syn::Error::new(
+                    ident.span(),
+                    "arg(require_equals, global) only support named arguments",
+                ));
+                continue;
+            }
 
             let value_display = arg
                 .value_name
@@ -315,6 +325,7 @@ pub fn expand_state_def_impl<'i>(
                 name_display: value_display.clone(),
                 value_display,
                 require_eq: false,
+                global: false,
             };
 
             if arg.last {
@@ -497,7 +508,27 @@ impl ToTokens for ParserStateDefImpl<'_> {
             }
         };
 
+        // Global named arguments.
+        let global_names = named_fields
+            .iter()
+            .filter(|f| f.global)
+            .flat_map(|f| f.arg_names.iter())
+            .collect::<Vec<_>>();
+        let feed_global_named_def = (!global_names.is_empty()).then(|| {
+            quote! {
+                fn feed_global_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
+                    match __name {
+                        #(#global_names)|* => __rt::ParserStateDyn::feed_named(self, __name),
+                        _ => __rt::FeedNamed::Continue(()),
+                    }
+                }
+            }
+        });
+
         // Unnamed argument dispatcher.
+
+        let mut subcommand_ty = quote! { __rt::Infallible };
+        let mut subcommand_getter = quote! { __rt::unreachable!() };
 
         let feed_unnamed_func = if unnamed_fields.is_empty()
             && catchall_field.is_none()
@@ -528,8 +559,15 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
             let catchall = if let Some(f) = catchall_field {
                 match f {
-                    CatchallFieldInfo::Subcommand { ident, .. } => {
-                        quote! { __rt::place_for_subcommand(&mut self.#ident) }
+                    CatchallFieldInfo::Subcommand {
+                        ident,
+                        effective_ty,
+                        ..
+                    } => {
+                        subcommand_ty = effective_ty.to_token_stream();
+                        subcommand_getter = quote! { &mut __this.#ident };
+                        let has_global = !global_names.is_empty();
+                        quote! { __rt::place_for_subcommand::<_, #has_global>(self) }
                     }
                     CatchallFieldInfo::VecLike { greedy, field } => {
                         let ident = field.ident;
@@ -600,6 +638,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
             #[automatically_derived]
             impl __rt::ParserState for #state_name {
                 type Output = #output_ty;
+                type Subcommand = #subcommand_ty;
+
                 const ARGS_INFO: __rt::ArgsInfo = #args_info_lit;
                 const TOTAL_UNNAMED_ARG_CNT: __rt::usize =
                     #self_unnamed_arg_cnt #(+ <<#flatten_tys as __rt::ArgsInternal>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
@@ -616,6 +656,12 @@ impl ToTokens for ParserStateDefImpl<'_> {
                         #(#field_names : #field_finishes,)*
                     })
                 }
+
+                fn subcommand_getter() -> impl __rt::Fn(&mut Self) -> &mut __rt::Option<Self::Subcommand> {
+                    |__this| #subcommand_getter
+                }
+
+                #feed_global_named_def
             }
 
             #[automatically_derived]

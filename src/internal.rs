@@ -95,12 +95,38 @@ pub fn place_for_set_value<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
     Place::<T, A, REQUIRE_EQ>::ref_cast_mut(place)
 }
 
+pub type GlobalAncestors<'a> = &'a mut dyn GlobalChain;
+
+/// The singly linked list for states of ancestor subcommands that accept any global arguments.
+/// Deeper states come first.
+/// It behaves like:
+/// `struct Node<'_> { node: &'_ mut dyn ParserStateDyn, parent: Option<&'_ mut Node<'_>> }`
+/// except lifetimes do not work without type erasure (`dyn`).
+pub trait GlobalChain {
+    fn search_global_named(&mut self, _name: &str) -> FeedNamed<'_> {
+        ControlFlow::Continue(())
+    }
+}
+
+impl GlobalChain for () {}
+impl<S: ParserState> GlobalChain for (&mut S, &mut dyn GlobalChain) {
+    fn search_global_named(&mut self, name: &str) -> FeedNamed<'_> {
+        self.0.feed_global_named(name)?;
+        self.1.search_global_named(name)
+    }
+}
+
 /// A greedy unnamed argument with its place attached as `&mut self`.
 ///
 /// It always consumes all the rest arguments.
 pub trait GreedyArgsPlace {
     // TODO: Maybe avoid splitting out the first argument?
-    fn feed_greedy(&mut self, arg: OsString, _args: &mut ArgsIter<'_>) -> Result<()>;
+    fn feed_greedy(
+        &mut self,
+        arg: OsString,
+        args: &mut ArgsIter<'_>,
+        global: GlobalAncestors<'_>,
+    ) -> Result<()>;
 }
 
 pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
@@ -112,7 +138,12 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
     struct Place<T, A>(Vec<T>, PhantomData<A>);
 
     impl<T, A: ArgValueInfo<T>> GreedyArgsPlace for Place<T, A> {
-        fn feed_greedy(&mut self, mut arg: OsString, args: &mut ArgsIter<'_>) -> Result<()> {
+        fn feed_greedy(
+            &mut self,
+            mut arg: OsString,
+            args: &mut ArgsIter<'_>,
+            _global: GlobalAncestors<'_>,
+        ) -> Result<()> {
             if let Some(high) = args.iter.size_hint().1 {
                 self.0.reserve(1 + high);
             }
@@ -129,24 +160,37 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
     Ok(Some(Place::<T, A>::ref_cast_mut(place)))
 }
 
-pub fn place_for_subcommand<C: Subcommand>(place: &mut Option<C>) -> FeedUnnamed<'_> {
+pub fn place_for_subcommand<S: ParserState, const CUR_HAS_GLOBAL: bool>(
+    state: &mut S,
+) -> FeedUnnamed<'_> {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<C>(Option<C>);
+    struct Place<S, const CUR_HAS_GLOBAL: bool>(S);
 
-    impl<C: CommandInternal> GreedyArgsPlace for Place<C> {
-        fn feed_greedy(&mut self, name: OsString, args: &mut ArgsIter<'_>) -> Result<()> {
+    impl<S: ParserState, const CUR_HAS_GLOBAL: bool> GreedyArgsPlace for Place<S, CUR_HAS_GLOBAL> {
+        fn feed_greedy(
+            &mut self,
+            name: OsString,
+            args: &mut ArgsIter<'_>,
+            global: GlobalAncestors<'_>,
+        ) -> Result<()> {
             let name = name
                 .to_str()
                 .ok_or_else(|| ErrorKind::InvalidUtf8(name.clone()))?;
-            let subcmd = C::try_parse_with_name(name, args)
-                .map_err(|err| err.in_subcommand::<C>(name.to_owned()))?;
-            self.0 = Some(subcmd);
+            let mut global = (&mut self.0, global);
+            let global = if CUR_HAS_GLOBAL {
+                &mut global as &mut dyn GlobalChain
+            } else {
+                global.1
+            };
+            let subcmd = S::Subcommand::try_parse_with_name(name, args, global)
+                .map_err(|err| err.in_subcommand::<S::Subcommand>(name.to_owned()))?;
+            *S::subcommand_getter()(&mut self.0) = Some(subcmd);
             Ok(())
         }
     }
 
-    Ok(Some(Place::<C>::ref_cast_mut(place)))
+    Ok(Some(Place::<S, CUR_HAS_GLOBAL>::ref_cast_mut(state)))
 }
 
 /// Break on a resolved place. Continue on unknown names.
@@ -162,11 +206,18 @@ pub trait ArgsInternal: Sized + 'static {
 
 pub trait ParserState: ParserStateDyn {
     type Output;
+    type Subcommand: Subcommand;
     const ARGS_INFO: ArgsInfo;
     const TOTAL_UNNAMED_ARG_CNT: usize;
 
     fn init() -> Self;
     fn finish(self) -> Result<Self::Output>;
+    fn subcommand_getter() -> impl Fn(&mut Self) -> &mut Option<Self::Subcommand>;
+
+    // The is only called via `GlobalChain::search_global_named` thus do not need to be in vtable.
+    fn feed_global_named(&mut self, _name: &str) -> FeedNamed<'_> {
+        ControlFlow::Continue(())
+    }
 }
 
 pub trait ParserStateDyn: 'static {
@@ -186,25 +237,37 @@ pub trait ParserStateDyn: 'static {
 pub trait CommandInternal: Sized {
     const COMMAND_INFO: CommandInfo;
 
-    fn try_parse_with_name(name: &str, args: &mut ArgsIter<'_>) -> Result<Self>;
+    fn try_parse_with_name(
+        name: &str,
+        args: &mut ArgsIter<'_>,
+        global: GlobalAncestors<'_>,
+    ) -> Result<Self>;
 }
 
 /// A common program-name-agnostic command.
 impl<A: Args> CommandInternal for A {
     const COMMAND_INFO: CommandInfo = CommandInfo::new_catchall(&A::__State::ARGS_INFO);
 
-    fn try_parse_with_name(_name: &str, args: &mut ArgsIter<'_>) -> Result<Self> {
-        try_parse_args(args)
+    fn try_parse_with_name(
+        _name: &str,
+        args: &mut ArgsIter<'_>,
+        global: GlobalAncestors<'_>,
+    ) -> Result<Self> {
+        try_parse_args(args, global)
     }
 }
 
-pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>) -> Result<A> {
+pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>, global: GlobalAncestors<'_>) -> Result<A> {
     let mut state = A::__State::init();
-    try_parse_with_state(&mut state, args)?;
+    try_parse_with_state(&mut state, args, global)?;
     state.finish()
 }
 
-pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<'_>) -> Result<()> {
+pub fn try_parse_with_state(
+    state: &mut dyn ParserStateDyn,
+    args: &mut ArgsIter<'_>,
+    global: GlobalAncestors<'_>,
+) -> Result<()> {
     let mut idx = 0usize;
     while let Some(arg) = args.cache_next_arg()? {
         match arg {
@@ -213,14 +276,30 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                 for mut arg in &mut args.iter {
                     match state.feed_unnamed(&mut arg, idx, true) {
                         Ok(None) => idx += 1,
-                        Ok(Some(place)) => return place.feed_greedy(arg, args),
+                        Ok(Some(place)) => {
+                            return place.feed_greedy(arg, args, global);
+                        }
                         Err(Some(err)) => return Err(err),
                         Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
                     }
                 }
             }
-            Arg::Named(name) => match state.feed_named(name) {
-                ControlFlow::Break(place) => match place.num_values() {
+            Arg::Named(name) => {
+                let place = match state.feed_named(name) {
+                    ControlFlow::Break(place) => place,
+                    ControlFlow::Continue(()) => match global.search_global_named(name) {
+                        ControlFlow::Break(place) => place,
+                        ControlFlow::Continue(()) => {
+                            // TODO: Configurable help?
+                            #[cfg(feature = "help")]
+                            if name == "h" || name == "--help" {
+                                return Err(ErrorKind::Help.into());
+                            }
+                            return Err(ErrorKind::UnknownNamedArgument.with_arg(name));
+                        }
+                    },
+                };
+                match place.num_values() {
                     NumValues::Zero => args.check_no_value()?,
                     NumValues::One {
                         require_equals: false,
@@ -232,19 +311,11 @@ pub fn try_parse_with_state(state: &mut dyn ParserStateDyn, args: &mut ArgsIter<
                     } => {
                         place.feed(Cow::Borrowed(args.take_value_after_eq()?))?;
                     }
-                },
-                ControlFlow::Continue(()) => {
-                    // TODO: Configurable help?
-                    #[cfg(feature = "help")]
-                    if name == "h" || name == "--help" {
-                        return Err(ErrorKind::Help.into());
-                    }
-                    return Err(ErrorKind::UnknownNamedArgument.with_arg(name));
                 }
-            },
+            }
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, idx, false) {
                 Ok(None) => idx += 1,
-                Ok(Some(place)) => return place.feed_greedy(arg, args),
+                Ok(Some(place)) => return place.feed_greedy(arg, args, global),
                 Err(Some(err)) => return Err(err),
                 Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
             },
