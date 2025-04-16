@@ -94,9 +94,9 @@ pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
 pub enum ArgTyKind<'a> {
     Bool,
     Option(&'a Type),
-    Convert,
     Vec(&'a Type),
     OptionVec(&'a Type),
+    Other,
 }
 
 impl ArgTyKind<'_> {
@@ -114,7 +114,7 @@ impl ArgTyKind<'_> {
         if let Some(subty) = strip_ty_ctor(ty, TY_VEC) {
             return ArgTyKind::Vec(subty);
         }
-        ArgTyKind::Convert
+        ArgTyKind::Other
     }
 }
 
@@ -192,7 +192,9 @@ pub struct ArgMeta {
     // TODO: raw
 
     // Value behaviors.
-    // TODO: num_args, value_delimiter, default_value,
+    pub default_value: Option<syn::Expr>,
+    pub default_value_t: Option<Override<syn::Expr>>,
+    // TODO: num_args, value_delimiter,
     // index, action, value_terminator, default_missing_value*, env
     // Not needed: required
 
@@ -283,6 +285,11 @@ impl ArgMeta {
         } else if path.is_ident("last") {
             check_true!();
             self.last = true;
+        } else if path.is_ident("default_value") {
+            check_dup!(default_value);
+            self.default_value = Some(meta.value()?.parse()?);
+        } else if path.is_ident("default_value_t") || path.is_ident("default_values_t") {
+            parse_unique_override(&mut self.default_value_t, &meta)?;
         } else if path.is_ident("help") {
             check_dup!(help);
             self.help = Some(meta.value()?.parse::<LitStr>()?.value());

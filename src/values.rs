@@ -25,6 +25,11 @@ pub trait ArgValueInfo<T>: 'static + Sized + sealed::Sealed {
     fn parse(self, v: Cow<'_, OsStr>) -> Result<T> {
         Self::parser()(v)
     }
+
+    #[inline]
+    fn parse_str(self, v: &str) -> Result<T> {
+        Self::parse(self, Cow::Borrowed(OsStr::new(v)))
+    }
 }
 
 pub trait ValueEnum: Sized {

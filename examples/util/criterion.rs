@@ -71,25 +71,25 @@ pub struct Cli {
     #[arg(long, conflicts_with = "profile_time", requires = "baseline")]
     load_baseline: Option<String>,
     /// Changes the default size of the sample for this run.
-    #[arg(long, default_value = "100")]
+    #[arg(long, default_value_t = 100)]
     sample_size: usize,
     /// Changes the default warm up time for this run.
-    #[arg(long, default_value = "3")]
+    #[arg(long, default_value_t = 3.0)]
     warm_up_time: f64,
     /// Changes the default measurement time for this run.
-    #[arg(long, default_value = "5")]
+    #[arg(long, default_value_t = 5.0)]
     measurement_time: f64,
     /// Changes the default number of resamples for this run.
     #[arg(long, default_value = "100000")]
     nresamples: NonZero<usize>,
     /// Changes the default noise threshold for this run.
-    #[arg(long, default_value = "0.01")]
+    #[arg(long, default_value_t = 0.01)]
     noise_threshld: f64,
     /// Changes the default confidence level for this run.
-    #[arg(long, default_value = "0.95")]
+    #[arg(long, default_value_t = 0.95)]
     confidence_level: f64,
     /// Changes the default significance level for this run.
-    #[arg(long, default_value = "0.05")]
+    #[arg(long, default_value_t = 0.05)]
     significance_level: f64,
     /// Benchmark only until the significance level has been reached
     #[arg(long, conflicts_with = "sample_size")]

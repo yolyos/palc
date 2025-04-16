@@ -123,6 +123,7 @@ struct FieldInfo<'i> {
     kind: FieldKind,
     /// The type used for parser inference, with `Option`/`Vec` stripped.
     effective_ty: &'i syn::Type,
+    finish: FieldFinish,
     /// Matching names for named arguments. Empty for unnamed arguments.
     arg_names: Vec<String>,
     /// Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
@@ -137,9 +138,6 @@ struct FieldInfo<'i> {
 enum FieldKind {
     BoolSetTrue,
     Option,
-    UnwrapOption,
-
-    Vec,
     OptionVec,
 }
 
@@ -180,6 +178,24 @@ fn value_parsed(ty: &syn::Type) -> TokenStream {
     }
 }
 
+enum FieldFinish {
+    Id,
+    UnwrapDefault,
+    UnwrapOrExpr(TokenStream),
+    UnwrapChecked,
+}
+
+impl ToTokens for FieldFinish {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            Self::Id => {}
+            Self::UnwrapDefault => tokens.extend(quote! { .unwrap_or_default() }),
+            Self::UnwrapOrExpr(expr) => tokens.extend(quote! { .unwrap_or_else(|| #expr) }),
+            Self::UnwrapChecked => tokens.extend(quote! { .unwrap() }),
+        }
+    }
+}
+
 pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
     cmd_attrs: Option<TopCommandMeta>,
@@ -210,7 +226,7 @@ pub fn expand_state_def_impl<'i>(
         let ident_str = ident.to_string();
         let value_display = heck::AsShoutySnekCase(&ident_str).to_string();
 
-        let arg = match attrs {
+        let mut arg = match attrs {
             ArgOrCommand::Arg(arg) => arg,
             ArgOrCommand::Command(ArgsCommandMeta::Subcommand) => {
                 let (optional, effective_ty) = match strip_ty_ctor(&field.ty, TY_OPTION) {
@@ -240,13 +256,41 @@ pub fn expand_state_def_impl<'i>(
             }
         };
 
-        let (kind, effective_ty) = match ArgTyKind::of(&field.ty) {
-            ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty),
-            ArgTyKind::Vec(subty) => (FieldKind::Vec, subty),
-            ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty),
-            ArgTyKind::Option(subty) => (FieldKind::Option, subty),
-            ArgTyKind::Convert => (FieldKind::UnwrapOption, &field.ty),
+        let ty_kind = ArgTyKind::of(&field.ty);
+        #[rustfmt::skip]
+        let (kind, effective_ty, mut finish) = match ty_kind {
+            ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty, FieldFinish::UnwrapDefault),
+            ArgTyKind::Vec(subty) => (FieldKind::OptionVec, subty, FieldFinish::UnwrapDefault),
+            ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty, FieldFinish::Id),
+            ArgTyKind::Option(subty) => (FieldKind::Option, subty, FieldFinish::Id),
+            ArgTyKind::Other => (FieldKind::Option, &field.ty, FieldFinish::UnwrapChecked),
         };
+        if let Some(expr) = arg.default_value.take() {
+            if arg.default_value_t.is_some() {
+                errs.push(syn::Error::new(
+                    field.ty.span(),
+                    "arg(default_value_t) conflicts with arg(default_value)",
+                ));
+            }
+
+            let value_info = value_info(effective_ty);
+            finish = FieldFinish::UnwrapOrExpr(quote_spanned! {field.ty.span()=>
+                __rt::ArgValueInfo::parse_str(#value_info, #expr).expect("cannot parse default value")
+            });
+        } else if let Some(default) = arg.default_value_t.take() {
+            // TODO: Support bool?
+            if !matches!(ty_kind, ArgTyKind::Vec(_) | ArgTyKind::Other) {
+                errs.push(syn::Error::new(
+                    field.ty.span(),
+                    "unsupported type for arg(default_value_t)",
+                ));
+            } else {
+                finish = match default {
+                    Override::Inherit => FieldFinish::UnwrapDefault,
+                    Override::Explicit(expr) => FieldFinish::UnwrapOrExpr(expr.to_token_stream()),
+                }
+            }
+        }
 
         let mut arg_names = Vec::new();
         if arg.is_named() {
@@ -294,6 +338,7 @@ pub fn expand_state_def_impl<'i>(
                 doc: arg.doc,
                 kind,
                 effective_ty,
+                finish,
                 arg_names,
                 name_display,
                 value_display,
@@ -310,17 +355,25 @@ pub fn expand_state_def_impl<'i>(
                 ));
                 continue;
             }
+            if arg.default_value_t.is_some() {
+                errs.push(syn::Error::new(
+                    ident.span(),
+                    "TODO: arg(default_value_t) supports named arguments yet",
+                ));
+                continue;
+            }
 
             let value_display = arg
                 .value_name
                 .clone()
                 .unwrap_or_else(|| heck::AsShoutySnakeCase(ident_str).to_string());
-            let is_vec_like = matches!(kind, FieldKind::Vec | FieldKind::OptionVec);
+            let is_vec_like = matches!(kind, FieldKind::OptionVec);
             let info = FieldInfo {
                 ident,
                 doc: arg.doc,
                 kind,
                 effective_ty,
+                finish,
                 arg_names: Vec::new(),
                 name_display: value_display.clone(),
                 value_display,
@@ -395,28 +448,24 @@ impl ToTokens for ParserStateDefImpl<'_> {
             let effective_ty = f.effective_ty;
             let name_display = &f.name_display;
             field_names.push(ident);
+            if matches!(f.finish, FieldFinish::UnwrapChecked) {
+                check_missings.extend(quote! {
+                    if self.#ident.is_none() {
+                        return __rt::missing_required_arg(#name_display)
+                    }
+                });
+            }
             match f.kind {
-                FieldKind::BoolSetTrue | FieldKind::Option | FieldKind::UnwrapOption => {
+                FieldKind::Option | FieldKind::BoolSetTrue => {
                     field_tys.push(quote! { __rt::Option<#effective_ty> });
                     field_inits.push(quote! { __rt::None });
-                    if f.kind == FieldKind::UnwrapOption {
-                        check_missings.extend(quote! {
-                            if self.#ident.is_none() {
-                                return __rt::missing_required_arg(#name_display)
-                            }
-                        });
-                    }
                 }
-                FieldKind::Vec | FieldKind::OptionVec => {
+                FieldKind::OptionVec => {
                     field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
                     field_inits.push(quote! { __rt::None });
                 }
             };
-            let tail = match f.kind {
-                FieldKind::UnwrapOption => quote! { .unwrap() },
-                FieldKind::BoolSetTrue | FieldKind::Vec => quote! { .unwrap_or_default() },
-                FieldKind::Option | FieldKind::OptionVec => quote!(),
-            };
+            let tail = &f.finish;
             field_finishes.push(quote! { self.#ident #tail });
         }
         match catchall_field {
@@ -447,7 +496,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 field_names.push(field.ident);
                 field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
                 field_inits.push(quote! { __rt::None });
-                let tail = (field.kind == FieldKind::Vec).then(|| quote! { .unwrap_or_default() });
+                let tail = &field.finish;
                 field_finishes.push(quote! { self.#ident #tail });
             }
         }
@@ -474,10 +523,10 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     FieldKind::BoolSetTrue => {
                         quote! {{ self.#ident = Some(true); __rt::place_for_flag() }}
                     }
-                    FieldKind::Option | FieldKind::UnwrapOption => quote_spanned! {span=>
+                    FieldKind::Option => quote_spanned! {span=>
                         __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#ident, #value_info)
                     },
-                    FieldKind::Vec | FieldKind::OptionVec => quote_spanned! {span=>
+                    FieldKind::OptionVec => quote_spanned! {span=>
                         __rt::place_for_vec::<_, _, #require_eq>(self.#ident.get_or_insert_default(), #value_info)
                     },
                 };
@@ -644,6 +693,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 const TOTAL_UNNAMED_ARG_CNT: __rt::usize =
                     #self_unnamed_arg_cnt #(+ <<#flatten_tys as __rt::ArgsInternal>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
+                #[allow(clippy::unnecessary_lazy_evaluations)]
                 fn init() -> Self {
                     Self {
                         #(#field_names : #field_inits,)*
@@ -704,10 +754,7 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                     .map(|s| format!("-{s}"));
                 let values = match kind {
                     FieldKind::BoolSetTrue => quote! { [] },
-                    FieldKind::Option
-                    | FieldKind::UnwrapOption
-                    | FieldKind::Vec
-                    | FieldKind::OptionVec => quote! { [#value_display] },
+                    FieldKind::Option | FieldKind::OptionVec => quote! { [#value_display] },
                 };
                 quote! {
                     __rt::refl::NamedArgInfo::__new(
