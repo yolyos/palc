@@ -29,6 +29,8 @@ pub(crate) enum ErrorKind {
     MissingArg0,
     MissingEq,
 
+    Constraint,
+
     #[cfg(feature = "help")]
     Help,
 
@@ -98,6 +100,10 @@ impl fmt::Display for Error {
             ErrorKind::MissingEq => {
                 maybe_arg.0 = " ";
                 write!(f, "missing required '=' for argument{maybe_arg}")
+            }
+
+            ErrorKind::Constraint => {
+                write!(f, "constraint failed{maybe_arg}")
             }
 
             #[cfg(feature = "help")]

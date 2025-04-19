@@ -74,6 +74,11 @@ pub mod __private {
         Err(ErrorKind::MissingRequiredSubcommand.into())
     }
 
+    // TODO: Detail errors.
+    pub fn fail_constraint<T>(arg: &'static str) -> Result<T> {
+        Err(ErrorKind::Constraint.with_arg(arg))
+    }
+
     #[inline]
     pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
         Cow::Owned(std::mem::take(s))

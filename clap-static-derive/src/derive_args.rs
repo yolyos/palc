@@ -4,7 +4,7 @@ use syn::spanned::Spanned;
 use syn::{DeriveInput, Error, Ident, Visibility};
 
 use crate::common::{
-    ArgOrCommand, ArgTyKind, ArgsCommandMeta, Doc, ErrorCollector, Override, TY_OPTION,
+    ArgOrCommand, ArgTyKind, ArgsCommandMeta, Doc, ErrorCollector, FieldPath, Override, TY_OPTION,
     TopCommandMeta, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
 };
 
@@ -127,6 +127,9 @@ struct FieldInfo<'i> {
 
     // Validations //
     not_none: bool,
+    exclusive: bool,
+    dependencies: Vec<FieldPath>,
+    conflicts: Vec<FieldPath>,
 
     // Docs //
     /// Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
@@ -341,6 +344,9 @@ pub fn expand_state_def_impl<'i>(
                 require_eq: arg.require_equals,
                 global: arg.global,
                 not_none,
+                exclusive: arg.exclusive,
+                dependencies: arg.requires,
+                conflicts: arg.conflicts_with,
                 name_display,
                 value_display,
                 doc: arg.doc,
@@ -380,6 +386,9 @@ pub fn expand_state_def_impl<'i>(
                 require_eq: false,
                 global: false,
                 not_none,
+                exclusive: arg.exclusive,
+                dependencies: arg.requires,
+                conflicts: arg.conflicts_with,
                 name_display,
                 value_display,
                 doc: arg.doc,
@@ -405,7 +414,14 @@ pub fn expand_state_def_impl<'i>(
         }
     }
 
-    Ok(out)
+    if out.fields.iter().any(|f| f.exclusive) && !out.flatten_fields.is_empty() {
+        errs.push(syn::Error::new(
+            Span::call_site(),
+            "TODO: arg(exclusive) is not supported on struct containing arg(flatten) yet",
+        ));
+    }
+
+    errs.finish_then(out)
 }
 
 impl ToTokens for ParserStateDefImpl<'_> {
@@ -703,18 +719,58 @@ struct ValidationImpl<'i>(&'i ParserStateDefImpl<'i>);
 
 impl ToTokens for ValidationImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        for FieldInfo { ident, name_display, not_none, .. } in &self.0.fields {
-            if *not_none {
+        let def = self.0;
+
+        if def.fields.iter().any(|f| f.exclusive) {
+            let names = def.fields.iter().map(|f| f.ident).chain(def.subcommand.map(|s| s.ident));
+            tokens.extend(quote! {
+                let __argcnt = 0usize #(+ self.#names.is_none() as usize)*;
+            });
+        }
+
+        for f @ FieldInfo { ident, name_display, .. } in &def.fields {
+            if f.not_none {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
                         return __rt::missing_required_arg(#name_display)
                     }
                 });
             }
+
+            let mut checks = TokenStream::new();
+            if f.exclusive {
+                checks.extend(quote! {
+                    if __argcnt != 1 {
+                        return __rt::fail_constraint(#name_display);
+                    }
+                });
+            }
+            if !f.dependencies.is_empty() {
+                let paths = f.dependencies.iter();
+                checks.extend(quote! {
+                    if #(self #paths.is_none())||* {
+                        return __rt::fail_constraint(#name_display);
+                    }
+                });
+            }
+            if !f.conflicts.is_empty() {
+                let paths = f.conflicts.iter();
+                checks.extend(quote! {
+                    if #(self #paths.is_some())||* {
+                        return __rt::fail_constraint(#name_display);
+                    }
+                });
+            }
+            if !checks.is_empty() {
+                tokens.extend(quote! {
+                    if self.#ident.is_some() {
+                        #checks
+                    }
+                });
+            }
         }
 
-        if let Some(SubcommandInfo { ident, .. }) =
-            self.0.subcommand.as_ref().filter(|s| !s.optional)
+        if let Some(SubcommandInfo { ident, .. }) = def.subcommand.as_ref().filter(|s| !s.optional)
         {
             tokens.extend(quote! {
                 if self.#ident.is_none() {

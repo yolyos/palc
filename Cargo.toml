@@ -15,10 +15,6 @@ os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_o
 ref-cast = "1.0.24"
 
 [[example]]
-name = "criterion-static"
-required-features = ["__test-allow-unknown-fields"]
-
-[[example]]
 name = "deno-static"
 required-features = ["__test-allow-unknown-fields"]
 

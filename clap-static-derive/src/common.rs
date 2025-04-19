@@ -1,6 +1,6 @@
 use std::ops;
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Ident, TokenStream};
 use quote::{ToTokens, quote};
 use syn::meta::ParseNestedMeta;
 use syn::parse::{Parse, ParseStream};
@@ -205,7 +205,10 @@ pub struct ArgMeta {
     // TODO: add, hide_*, next_line_help, help_heading, display_order
 
     // Validation.
-    // TODO: exclusive, requires, default_value_if{,s}, required_unless_present*, required_if*,
+    pub exclusive: bool,
+    pub requires: Vec<FieldPath>,
+    pub conflicts_with: Vec<FieldPath>,
+    // TODO: default_value_if{,s}, required_unless_present*, required_if*,
     // conflicts_with*, overrides_with*
 }
 
@@ -291,6 +294,15 @@ impl ArgMeta {
         } else if path.is_ident("hide") {
             check_true!();
             self.hide = true;
+        } else if path.is_ident("exclusive") {
+            check_true!();
+            self.exclusive = true;
+        } else if path.is_ident("requires") {
+            self.requires.push(meta.value()?.parse()?);
+        } else if path.is_ident("conflicts_with") {
+            self.conflicts_with.push(meta.value()?.parse()?);
+        } else if path.is_ident("conflicts_with_all") {
+            self.conflicts_with.extend(meta.value()?.parse::<OneOrArray<FieldPath>>()?);
         } else {
             if cfg!(feature = "__test-allow-unknown-fields") {
                 if meta.input.peek(Token![=]) {
@@ -458,6 +470,44 @@ fn parse_unique_override(
     }
     *place = Some(meta.input.parse()?);
     Ok(())
+}
+
+/// `"IDENT"` or `("." IDENT)+`.
+pub struct FieldPath(pub Vec<Ident>);
+
+impl ops::Deref for FieldPath {
+    type Target = [Ident];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Parse for FieldPath {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let mut path = Vec::new();
+        if input.peek(LitStr) {
+            path.push(input.parse::<LitStr>()?.parse::<Ident>()?);
+        } else {
+            while input.peek(Token![.]) {
+                input.parse::<Token![.]>()?;
+                path.push(input.parse::<Ident>()?);
+            }
+            if path.is_empty() {
+                return Err(input.error(r#"expecting "field" or .field"#));
+            }
+        }
+        Ok(Self(path))
+    }
+}
+
+impl ToTokens for FieldPath {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        for ident in &self.0 {
+            tokens.extend(quote! { . });
+            ident.to_tokens(tokens);
+        }
+    }
 }
 
 /// Collect doc-comments into a single string.

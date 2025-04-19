@@ -474,7 +474,8 @@ struct LintSubcommand {
     rules: bool,
 
     /// Ignore linting particular source files
-    #[arg(long, use_value_delimiter = true, require_equals = true, requires = "unstable")]
+    #[arg(long, use_value_delimiter = true, require_equals = true)]
+    // TODO: requires = "unstable"
     ignore: Vec<PathBuf>,
 
     /// Output lint result in JSON format
@@ -524,7 +525,10 @@ struct RunSubcommand {
 
     // duplicate arg: conflicts
     /// Watch for file changes and restart process automatically
-    #[arg(long, requires = "unstable", conflicts_with = "inspect", conflicts_with = "inspect-brk")]
+    #[arg(long)]
+    // TODO: conflicts_with = "inspect",
+    // TODO: conflicts_with = "inspect-brk"
+    // TODO: requires = "unstable",
     watch: bool,
 
     #[command(flatten)]
@@ -547,7 +551,8 @@ Directory arguments are expanded to all contained files matching the glob
   deno test src/")]
 struct TestSubcommand {
     /// Cache test modules, but don't run tests
-    #[arg(long, requires = "unstable")]
+    #[arg(long)]
+    // TODO: requires = "unstable"
     no_run: bool,
 
     /// Stop on first error
@@ -563,7 +568,8 @@ struct TestSubcommand {
     filter: Option<String>,
 
     /// Collect coverage information
-    #[arg(long, requires = "unstable", conflicts_with = "inspect", conflicts_with = "inspect")]
+    #[arg(long)]
+    // TODO: requires = "unstable", conflicts_with = "inspect", conflicts_with = "inspect"
     coverage: bool,
 
     /// List of file names to run
@@ -666,7 +672,8 @@ struct CompilationArgs {
 #[derive(Args, Debug, Clone)]
 struct ImportMapArg {
     /// UNSTABLE: Load import map file
-    #[arg(long, alias = "importmap", value_name = "FILE", requires = "unstable")]
+    #[arg(long, alias = "importmap", value_name = "FILE")]
+    // TODO: requires = "unstable"
     import_map: Option<String>,
 }
 
@@ -761,6 +768,7 @@ struct RuntimeArgs {
 #[derive(Args, Debug, Clone)]
 struct WatchArg {
     /// Watch for file changes and restart process automatically
-    #[arg(long, requires = "unstable")]
+    #[arg(long)]
+    // TODO: requires = "unstable"
     watch: bool,
 }
