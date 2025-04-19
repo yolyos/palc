@@ -69,6 +69,33 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
     Place::<T, A, REQUIRE_EQ>::ref_cast_mut(place)
 }
 
+pub fn place_for_vec_sep<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DELIMITER: char>(
+    place: &mut Vec<T>,
+    _: A,
+) -> &'_ mut dyn ArgPlace {
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    struct Place<T, A, const REQUIRE_EQ: bool, const DELIMITER: char>(Vec<T>, PhantomData<A>);
+
+    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DELIMITER: char> ArgPlace
+        for Place<T, A, REQUIRE_EQ, DELIMITER>
+    {
+        fn num_values(&self) -> NumValues {
+            NumValues::One { require_equals: REQUIRE_EQ }
+        }
+
+        fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
+            let parser = A::parser();
+            for frag in value.split(DELIMITER) {
+                self.0.push(parser(Cow::Borrowed(frag))?);
+            }
+            Ok(())
+        }
+    }
+
+    Place::<T, A, REQUIRE_EQ, DELIMITER>::ref_cast_mut(place)
+}
+
 pub fn place_for_set_value<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
     place: &mut Option<T>,
     _: A,

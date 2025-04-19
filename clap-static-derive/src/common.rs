@@ -1,6 +1,6 @@
 use std::ops;
 
-use proc_macro2::{Ident, TokenStream};
+use proc_macro2::{Ident, Span, TokenStream};
 use quote::{ToTokens, quote};
 use syn::meta::ParseNestedMeta;
 use syn::parse::{Parse, ParseStream};
@@ -194,7 +194,8 @@ pub struct ArgMeta {
     // Value behaviors.
     pub default_value: Option<syn::Expr>,
     pub default_value_t: Option<Override<syn::Expr>>,
-    // TODO: num_args, value_delimiter,
+    pub value_delimiter: Option<syn::LitChar>,
+    // TODO: num_args,
     // index, action, value_terminator, default_missing_value*, env
     // Not needed: required
 
@@ -285,6 +286,13 @@ impl ArgMeta {
             self.default_value = Some(meta.value()?.parse()?);
         } else if path.is_ident("default_value_t") || path.is_ident("default_values_t") {
             parse_unique_override(&mut self.default_value_t, &meta)?;
+        } else if path.is_ident("use_value_delimiter") {
+            check_true!();
+            check_dup!(value_delimiter);
+            self.value_delimiter = Some(syn::LitChar::new(',', Span::call_site()));
+        } else if path.is_ident("value_delimiter") {
+            check_dup!(value_delimiter);
+            self.value_delimiter = Some(meta.value()?.parse::<syn::LitChar>()?);
         } else if path.is_ident("help") {
             check_dup!(help);
             self.help = Some(meta.value()?.parse::<LitStr>()?.value());

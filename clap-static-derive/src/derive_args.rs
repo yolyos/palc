@@ -124,6 +124,7 @@ struct FieldInfo<'i> {
     arg_names: Vec<String>,
     require_eq: bool,
     global: bool,
+    value_delimiter: Option<syn::LitChar>,
 
     // Validations //
     not_none: bool,
@@ -290,6 +291,16 @@ pub fn expand_state_def_impl<'i>(
             }
         }
 
+        if let Some(ch) = &arg.value_delimiter {
+            if !matches!(kind, FieldKind::OptionVec) {
+                errs.push(syn::Error::new(
+                    ch.span(),
+                    "arg(value_delimiter) must be used on Vec-like types",
+                ));
+                arg.value_delimiter = None;
+            }
+        }
+
         let not_none = matches!(finish, FieldFinish::UnwrapChecked);
         // Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
         let mut name_display = String::new();
@@ -343,6 +354,7 @@ pub fn expand_state_def_impl<'i>(
                 arg_names,
                 require_eq: arg.require_equals,
                 global: arg.global,
+                value_delimiter: arg.value_delimiter,
                 not_none,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -385,6 +397,7 @@ pub fn expand_state_def_impl<'i>(
                 arg_names: Vec::new(),
                 require_eq: false,
                 global: false,
+                value_delimiter: arg.value_delimiter,
                 not_none,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -554,10 +567,19 @@ impl ToTokens for FeedNamedImpl<'_> {
             return;
         }
 
-        let arms = def.named_fields
+        let arms = def
+            .named_fields
             .iter()
             .map(|&idx| {
-                let FieldInfo {ident, kind, effective_ty, arg_names, require_eq, ..} = &def.fields[idx];
+                let FieldInfo {
+                    ident,
+                    kind,
+                    effective_ty,
+                    arg_names,
+                    require_eq,
+                    value_delimiter,
+                    ..
+                } = &def.fields[idx];
                 let value_info = value_info(effective_ty);
                 let action = match kind {
                     FieldKind::BoolSetTrue => {
@@ -566,8 +588,19 @@ impl ToTokens for FeedNamedImpl<'_> {
                     FieldKind::Option => quote_spanned! {effective_ty.span()=>
                         __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#ident, #value_info)
                     },
-                    FieldKind::OptionVec => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_vec::<_, _, #require_eq>(self.#ident.get_or_insert_default(), #value_info)
+                    FieldKind::OptionVec => match value_delimiter {
+                        Some(ch) => quote_spanned! {effective_ty.span()=>
+                            __rt::place_for_vec_sep::<_, _, #require_eq, #ch>(
+                                self.#ident.get_or_insert_default(),
+                                #value_info,
+                            )
+                        },
+                        None => quote_spanned! {effective_ty.span()=>
+                            __rt::place_for_vec::<_, _, #require_eq>(
+                                self.#ident.get_or_insert_default(),
+                                #value_info,
+                            )
+                        },
                     },
                 };
                 quote! { #(#arg_names)|* => #action, }
