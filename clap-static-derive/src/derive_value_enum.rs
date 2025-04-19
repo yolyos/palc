@@ -48,11 +48,7 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<ValueEnumImpl<'_>> {
         return Err(err);
     }
 
-    Ok(ValueEnumImpl {
-        ident: &def.ident,
-        generics: &def.generics,
-        variants,
-    })
+    Ok(ValueEnumImpl { ident: &def.ident, generics: &def.generics, variants })
 }
 
 struct ValueEnumImpl<'i> {

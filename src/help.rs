@@ -6,11 +6,10 @@ pub(crate) type SubcommandPath = Vec<(String, CommandInfo)>;
 
 pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Result {
     let ((last_cmd, cmd_info), ancestors) = path.split_first().unwrap();
-    let Some(info) = cmd_info.catchall().or_else(|| {
-        cmd_info
-            .commands()
-            .find_map(|(c, args)| (c == last_cmd).then_some(args))
-    }) else {
+    let Some(info) = cmd_info
+        .catchall()
+        .or_else(|| cmd_info.commands().find_map(|(c, args)| (c == last_cmd).then_some(args)))
+    else {
         // Invalid last subcommand, help for all subcommands?
         todo!();
     };
@@ -36,11 +35,7 @@ pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Res
     // TODO: Hide optional arguments?
     for arg in info.named_args() {
         has_named = true;
-        let name = arg
-            .long_names()
-            .first()
-            .or(arg.short_names().first())
-            .unwrap();
+        let name = arg.long_names().first().or(arg.short_names().first()).unwrap();
         write!(out, " {name}")?;
         match arg.value_display() {
             [] => {}

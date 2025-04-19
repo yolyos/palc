@@ -38,10 +38,7 @@ pub struct ArgsImpl<'i> {
 }
 
 fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<'_>> {
-    let syn::Data::Struct(syn::DataStruct {
-        fields: syn::Fields::Named(fields),
-        ..
-    }) = &def.data
+    let syn::Data::Struct(syn::DataStruct { fields: syn::Fields::Named(fields), .. }) = &def.data
     else {
         return Err(syn::Error::new(
             Span::call_site(),
@@ -50,10 +47,7 @@ fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<
     };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
-        return Err(Error::new(
-            def.ident.span(),
-            "TODO: generics are not supported yet",
-        ));
+        return Err(Error::new(def.ident.span(), "TODO: generics are not supported yet"));
     }
 
     let mut errs = ErrorCollector::default();
@@ -61,19 +55,11 @@ fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<
 
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
-    let state = errs.collect(expand_state_def_impl(
-        &def.vis,
-        cmd_meta,
-        state_name,
-        struct_name,
-        fields,
-    ));
+    let state =
+        errs.collect(expand_state_def_impl(&def.vis, cmd_meta, state_name, struct_name, fields));
 
     errs.finish()?;
-    Ok(ArgsImpl {
-        is_parser,
-        state: state.unwrap(),
-    })
+    Ok(ArgsImpl { is_parser, state: state.unwrap() })
 }
 
 impl ToTokens for ArgsImpl<'_> {
@@ -254,18 +240,11 @@ pub fn expand_state_def_impl<'i>(
                     Some(subty) => (true, subty),
                     None => (false, &field.ty),
                 };
-                out.subcommand = Some(SubcommandInfo {
-                    ident,
-                    effective_ty,
-                    optional,
-                });
+                out.subcommand = Some(SubcommandInfo { ident, effective_ty, optional });
                 continue;
             }
             ArgOrCommand::Command(ArgsCommandMeta::Flatten) => {
-                out.flatten_fields.push(FlattenFieldInfo {
-                    ident,
-                    effective_ty: &field.ty,
-                });
+                out.flatten_fields.push(FlattenFieldInfo { ident, effective_ty: &field.ty });
                 continue;
             }
         };
@@ -411,10 +390,7 @@ pub fn expand_state_def_impl<'i>(
                 // Last argument(s).
                 if let Some(prev) = out.last_field.replace(field_idx) {
                     errs.push(Error::new(ident.span(), "duplicated arg(last)"));
-                    errs.push(Error::new(
-                        out.fields[prev].ident.span(),
-                        "previously defined here",
-                    ));
+                    errs.push(Error::new(out.fields[prev].ident.span(), "previously defined here"));
                     continue;
                 }
             } else if is_vec_like {
@@ -434,13 +410,7 @@ pub fn expand_state_def_impl<'i>(
 
 impl ToTokens for ParserStateDefImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self {
-            vis,
-            state_name,
-            output_ty,
-            fields,
-            ..
-        } = self;
+        let Self { vis, state_name, output_ty, fields, .. } = self;
 
         // State initialization and finalization.
         //
@@ -452,19 +422,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let mut field_tys = Vec::new();
         let mut field_inits = Vec::new();
         let mut field_finishes = Vec::new();
-        for &idx in self
-            .named_fields
-            .iter()
-            .chain(&self.unnamed_fields)
-            .chain(&self.last_field)
-        {
-            let FieldInfo {
-                ident,
-                effective_ty,
-                finish,
-                kind,
-                ..
-            } = &fields[idx];
+        for &idx in self.named_fields.iter().chain(&self.unnamed_fields).chain(&self.last_field) {
+            let FieldInfo { ident, effective_ty, finish, kind, .. } = &fields[idx];
             field_names.push(*ident);
             match kind {
                 FieldKind::Option | FieldKind::BoolSetTrue => {
@@ -478,12 +437,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
             };
             field_finishes.push(quote! { self.#ident #finish });
         }
-        if let Some(SubcommandInfo {
-            ident,
-            effective_ty,
-            optional,
-        }) = self.subcommand
-        {
+        if let Some(SubcommandInfo { ident, effective_ty, optional }) = self.subcommand {
             field_names.push(ident);
             field_tys.push(quote! { __rt::Option<#effective_ty> });
             field_inits.push(quote! { __rt::None });
@@ -495,22 +449,13 @@ impl ToTokens for ParserStateDefImpl<'_> {
             field_finishes.push(quote! { self.#ident #tail });
         }
         if let Some(CatchallFieldInfo { field_idx, .. }) = self.catchall_field {
-            let FieldInfo {
-                ident,
-                effective_ty,
-                finish,
-                ..
-            } = &fields[field_idx];
+            let FieldInfo { ident, effective_ty, finish, .. } = &fields[field_idx];
             field_names.push(*ident);
             field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
             field_inits.push(quote! { __rt::None });
             field_finishes.push(quote! { self.#ident #finish });
         }
-        for &FlattenFieldInfo {
-            ident,
-            effective_ty,
-        } in &self.flatten_fields
-        {
+        for &FlattenFieldInfo { ident, effective_ty } in &self.flatten_fields {
             field_names.push(ident);
             field_tys.push(quote! { <#effective_ty as __rt::ArgsInternal>::__State });
             field_inits.push(quote! { __rt::ParserState::init() });
@@ -519,12 +464,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
         let mut subcommand_ty = quote! { __rt::Infallible };
         let mut subcommand_getter = quote! { __rt::unreachable!() };
-        if let Some(SubcommandInfo {
-            ident,
-            effective_ty,
-            ..
-        }) = self.subcommand
-        {
+        if let Some(SubcommandInfo { ident, effective_ty, .. }) = self.subcommand {
             subcommand_ty = effective_ty.to_token_stream();
             subcommand_getter = quote! { &mut __this.#ident };
         }
@@ -699,11 +639,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
 
         let mut arms = TokenStream::new();
         for (ord, &i) in def.unnamed_fields.iter().enumerate() {
-            let FieldInfo {
-                ident,
-                effective_ty,
-                ..
-            } = def.fields[i];
+            let FieldInfo { ident, effective_ty, .. } = def.fields[i];
             let parsed = value_parsed(effective_ty);
             arms.extend(quote! {
                 #ord => self.#ident = __rt::Some(#parsed),
@@ -711,11 +647,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
         }
 
         let catchall = if let Some(CatchallFieldInfo { field_idx, greedy }) = def.catchall_field {
-            let FieldInfo {
-                ident,
-                effective_ty,
-                ..
-            } = def.fields[field_idx];
+            let FieldInfo { ident, effective_ty, .. } = def.fields[field_idx];
             if greedy {
                 let value_info = value_info(effective_ty);
                 quote! { __rt::place_for_trailing_var_arg(&mut self.#ident, #value_info) }
@@ -743,11 +675,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
         };
 
         let handle_last = def.last_field.map(|idx| {
-            let FieldInfo {
-                ident,
-                effective_ty,
-                ..
-            } = &def.fields[idx];
+            let FieldInfo { ident, effective_ty, .. } = &def.fields[idx];
             let value_info = value_info(effective_ty);
             quote! {
                 if __is_last {
@@ -775,13 +703,7 @@ struct ValidationImpl<'i>(&'i ParserStateDefImpl<'i>);
 
 impl ToTokens for ValidationImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        for FieldInfo {
-            ident,
-            name_display,
-            not_none,
-            ..
-        } in &self.0.fields
-        {
+        for FieldInfo { ident, name_display, not_none, .. } in &self.0.fields {
             if *not_none {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
@@ -820,19 +742,10 @@ impl ToTokens for ArgsInfoLiteral<'_> {
         } = self.0;
 
         let named_args = named_fields.iter().filter(|&&i| !fields[i].hide).map(|&i| {
-            let FieldInfo {
-                arg_names,
-                value_display,
-                require_eq,
-                kind,
-                doc,
-                ..
-            } = &fields[i];
+            let FieldInfo { arg_names, value_display, require_eq, kind, doc, .. } = &fields[i];
             let long_names = arg_names.iter().filter(|s| s.starts_with("--"));
-            let short_names = arg_names
-                .iter()
-                .filter(|s| !s.starts_with("--"))
-                .map(|s| format!("-{s}"));
+            let short_names =
+                arg_names.iter().filter(|s| !s.starts_with("--")).map(|s| format!("-{s}"));
             let values = match kind {
                 FieldKind::BoolSetTrue => quote! { [] },
                 FieldKind::Option | FieldKind::OptionVec => quote! { [#value_display] },
@@ -847,47 +760,27 @@ impl ToTokens for ArgsInfoLiteral<'_> {
                 )
             }
         });
-        let unnamed_args = unnamed_fields
-            .iter()
-            .filter(|&&i| !fields[i].hide)
-            .map(|&i| {
-                let FieldInfo {
-                    doc, value_display, ..
-                } = &fields[i];
-                quote! { __rt::refl::UnnamedArgInfo::__new(#doc, #value_display) }
-            });
+        let unnamed_args = unnamed_fields.iter().filter(|&&i| !fields[i].hide).map(|&i| {
+            let FieldInfo { doc, value_display, .. } = &fields[i];
+            quote! { __rt::refl::UnnamedArgInfo::__new(#doc, #value_display) }
+        });
         let mut trailing_var_arg = quote! { __rt::None };
         let mut subcmd = trailing_var_arg.clone();
         if let Some(CatchallFieldInfo { field_idx, greedy }) = *catchall_field {
-            let FieldInfo {
-                doc,
-                value_display,
-                hide,
-                ..
-            } = &self.0.fields[field_idx];
+            let FieldInfo { doc, value_display, hide, .. } = &self.0.fields[field_idx];
             if !hide {
                 trailing_var_arg = quote! {
                     Some((#greedy, __rt::refl::UnnamedArgInfo::__new(#doc, #value_display)))
                 };
             }
         }
-        if let Some(SubcommandInfo {
-            effective_ty,
-            optional,
-            ..
-        }) = self.0.subcommand
-        {
+        if let Some(SubcommandInfo { effective_ty, optional, .. }) = self.0.subcommand {
             subcmd = quote! {
                 Some((#optional, <#effective_ty as __rt::CommandInternal>::COMMAND_INFO))
             };
         }
         let last_arg = match last_field.map(|i| &fields[i]) {
-            Some(FieldInfo {
-                hide,
-                doc,
-                value_display,
-                ..
-            }) if !hide => {
+            Some(FieldInfo { hide, doc, value_display, .. }) if !hide => {
                 quote! { __rt::Some(__rt::refl::UnnamedArgInfo::__new(#doc, #value_display)) }
             }
             _ => quote! { __rt::None },

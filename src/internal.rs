@@ -57,9 +57,7 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
 
     impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool> ArgPlace for Place<T, A, REQUIRE_EQ> {
         fn num_values(&self) -> NumValues {
-            NumValues::One {
-                require_equals: REQUIRE_EQ,
-            }
+            NumValues::One { require_equals: REQUIRE_EQ }
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
@@ -81,9 +79,7 @@ pub fn place_for_set_value<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
 
     impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool> ArgPlace for Place<T, A, REQUIRE_EQ> {
         fn num_values(&self) -> NumValues {
-            NumValues::One {
-                require_equals: REQUIRE_EQ,
-            }
+            NumValues::One { require_equals: REQUIRE_EQ }
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
@@ -174,15 +170,10 @@ pub fn place_for_subcommand<S: ParserState, const CUR_HAS_GLOBAL: bool>(
             args: &mut ArgsIter<'_>,
             global: GlobalAncestors<'_>,
         ) -> Result<()> {
-            let name = name
-                .to_str()
-                .ok_or_else(|| ErrorKind::InvalidUtf8(name.clone()))?;
+            let name = name.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(name.clone()))?;
             let mut global = (&mut self.0, global);
-            let global = if CUR_HAS_GLOBAL {
-                &mut global as &mut dyn GlobalChain
-            } else {
-                global.1
-            };
+            let global =
+                if CUR_HAS_GLOBAL { &mut global as &mut dyn GlobalChain } else { global.1 };
             let subcmd = S::Subcommand::try_parse_with_name(name, args, global)
                 .map_err(|err| err.in_subcommand::<S::Subcommand>(name.to_owned()))?;
             *S::subcommand_getter()(&mut self.0) = Some(subcmd);
@@ -301,14 +292,10 @@ pub fn try_parse_with_state(
                 };
                 match place.num_values() {
                     NumValues::Zero => args.check_no_value()?,
-                    NumValues::One {
-                        require_equals: false,
-                    } => {
+                    NumValues::One { require_equals: false } => {
                         place.feed(args.take_value()?)?;
                     }
-                    NumValues::One {
-                        require_equals: true,
-                    } => {
+                    NumValues::One { require_equals: true } => {
                         place.feed(Cow::Borrowed(args.take_value_after_eq()?))?;
                     }
                 }
@@ -346,11 +333,7 @@ enum Arg<'a> {
 
 impl<'a> ArgsIter<'a> {
     pub(crate) fn new(iter: &'a mut dyn Iterator<Item = OsString>) -> Self {
-        Self {
-            iter,
-            cur_input_arg: OsString::new(),
-            state: ArgsState::Unnamed,
-        }
+        Self { iter, cur_input_arg: OsString::new(), state: ArgsState::Unnamed }
     }
 
     fn check_no_value(&mut self) -> Result<()> {
@@ -420,9 +403,7 @@ impl<'a> ArgsIter<'a> {
                     match std::str::from_utf8(&rest[..len]) {
                         Ok(s) => {
                             // Invariant: `prev_end..prev_end+len` is checked to be valid UTF-8.
-                            self.state = ArgsState::Short {
-                                next_pos: next_pos + len,
-                            };
+                            self.state = ArgsState::Short { next_pos: next_pos + len };
                             return Ok(Some(Arg::Named(s)));
                         }
                         // Incomplete encoding.
@@ -452,19 +433,14 @@ impl<'a> ArgsIter<'a> {
             Arg::DashDash
         } else if argb.starts_with(b"--") {
             let end = if let Some(pos) = argb.iter().position(|&b| b == b'=') {
-                self.state = ArgsState::Long {
-                    eq_pos: NonZero::new(pos),
-                };
+                self.state = ArgsState::Long { eq_pos: NonZero::new(pos) };
                 pos
             } else {
                 self.state = ArgsState::Long { eq_pos: None };
                 argb.len()
             };
             let s = self.cur_input_arg.index(..end);
-            Arg::Named(
-                s.to_str()
-                    .ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?,
-            )
+            Arg::Named(s.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?)
         } else if argb.starts_with(b"-") {
             self.state = ArgsState::Short { next_pos: 1 };
             return self.cache_next_arg();

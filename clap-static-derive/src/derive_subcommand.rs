@@ -35,16 +35,9 @@ struct SubcommandImpl<'i> {
 }
 
 enum VariantImpl<'i> {
-    Unit {
-        variant_name: &'i Ident,
-    },
-    Tuple {
-        variant_name: &'i Ident,
-        ty: &'i Type,
-    },
-    Struct {
-        state_name: Ident,
-    },
+    Unit { variant_name: &'i Ident },
+    Tuple { variant_name: &'i Ident, ty: &'i Type },
+    Struct { state_name: Ident },
 }
 
 impl ToTokens for VariantImpl<'_> {
@@ -74,10 +67,7 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
     };
 
     if !def.generics.params.is_empty() || def.generics.where_clause.is_some() {
-        return Err(syn::Error::new(
-            def.ident.span(),
-            "TODO: generics are not supported yet",
-        ));
+        return Err(syn::Error::new(def.ident.span(), "TODO: generics are not supported yet"));
     }
 
     let mut errs = ErrorCollector::default();
@@ -100,10 +90,7 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
                         ));
                         return None;
                     }
-                    VariantImpl::Tuple {
-                        variant_name,
-                        ty: &fields.unnamed[0].ty,
-                    }
+                    VariantImpl::Tuple { variant_name, ty: &fields.unnamed[0].ty }
                 }
                 syn::Fields::Named(fields) => {
                     let state_name =
@@ -126,20 +113,12 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
         })
         .collect::<Vec<_>>();
 
-    errs.finish_then(SubcommandImpl {
-        enum_name,
-        state_defs,
-        variants,
-    })
+    errs.finish_then(SubcommandImpl { enum_name, state_defs, variants })
 }
 
 impl ToTokens for SubcommandImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self {
-            enum_name,
-            state_defs,
-            variants,
-        } = self;
+        let Self { enum_name, state_defs, variants } = self;
         let name_strs = variants.iter().map(|(arg_name, _)| arg_name);
         let cases = variants.iter().map(|(_, e)| e);
         let command_info_lit = CommandInfoLiteral(self);

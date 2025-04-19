@@ -226,10 +226,7 @@ impl ArgMeta {
         }
         macro_rules! check_dup {
             ($name:ident) => {
-                ensure!(
-                    self.$name.is_none(),
-                    concat!("duplicated arg(", stringify!($name), ")")
-                );
+                ensure!(self.$name.is_none(), concat!("duplicated arg(", stringify!($name), ")"));
             };
         }
         macro_rules! check_true {
@@ -259,17 +256,11 @@ impl ArgMeta {
             });
         } else if path.is_ident("alias") || path.is_ident("aliases") {
             self.alias.extend(
-                meta.value()?
-                    .parse::<OneOrArray<LitStr>>()?
-                    .into_iter()
-                    .map(|s| s.value()),
+                meta.value()?.parse::<OneOrArray<LitStr>>()?.into_iter().map(|s| s.value()),
             );
         } else if path.is_ident("short_alias") || path.is_ident("short_aliases") {
             self.short_alias.extend(
-                meta.value()?
-                    .parse::<OneOrArray<LitChar>>()?
-                    .into_iter()
-                    .map(|s| s.value()),
+                meta.value()?.parse::<OneOrArray<LitChar>>()?.into_iter().map(|s| s.value()),
             );
         } else if path.is_ident("value_name") {
             check_dup!(value_name);
@@ -327,10 +318,7 @@ impl Parse for ArgsCommandMeta {
         } else if ident == "flatten" {
             Self::Flatten
         } else {
-            return Err(syn::Error::new(
-                ident.span(),
-                "must be either 'subcommand' or 'flatten'",
-            ));
+            return Err(syn::Error::new(ident.span(), "must be either 'subcommand' or 'flatten'"));
         })
     }
 }
@@ -438,10 +426,7 @@ impl<T: Parse> Parse for OneOrArray<T> {
         Ok(Self(if input.peek(token::Bracket) {
             let inner;
             bracketed!(inner in input);
-            inner
-                .parse_terminated(T::parse, Token![,])?
-                .into_iter()
-                .collect()
+            inner.parse_terminated(T::parse, Token![,])?.into_iter().collect()
         } else {
             vec![input.parse::<T>()?]
         }))
@@ -493,11 +478,7 @@ impl Doc {
     fn extend_from_attr(&mut self, attr: &Attribute) -> syn::Result<()> {
         if attr.path().is_ident("doc") {
             if let syn::Meta::NameValue(m) = &attr.meta {
-                if let syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(s),
-                    ..
-                }) = &m.value
-                {
+                if let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &m.value {
                     let s = s.value();
                     let s = s.trim_ascii();
                     if s.is_empty() {

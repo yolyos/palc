@@ -474,12 +474,7 @@ struct LintSubcommand {
     rules: bool,
 
     /// Ignore linting particular source files
-    #[arg(
-        long,
-        use_value_delimiter = true,
-        require_equals = true,
-        requires = "unstable"
-    )]
+    #[arg(long, use_value_delimiter = true, require_equals = true, requires = "unstable")]
     ignore: Vec<PathBuf>,
 
     /// Output lint result in JSON format
@@ -529,12 +524,7 @@ struct RunSubcommand {
 
     // duplicate arg: conflicts
     /// Watch for file changes and restart process automatically
-    #[arg(
-        long,
-        requires = "unstable",
-        conflicts_with = "inspect",
-        conflicts_with = "inspect-brk"
-    )]
+    #[arg(long, requires = "unstable", conflicts_with = "inspect", conflicts_with = "inspect-brk")]
     watch: bool,
 
     #[command(flatten)]
@@ -573,12 +563,7 @@ struct TestSubcommand {
     filter: Option<String>,
 
     /// Collect coverage information
-    #[arg(
-        long,
-        requires = "unstable",
-        conflicts_with = "inspect",
-        conflicts_with = "inspect"
-    )]
+    #[arg(long, requires = "unstable", conflicts_with = "inspect", conflicts_with = "inspect")]
     coverage: bool,
 
     /// List of file names to run

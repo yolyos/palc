@@ -1,7 +1,4 @@
-#![cfg_attr(
-    not(feature = "help"),
-    expect(unused, reason = "some getters are only used by help")
-)]
+#![cfg_attr(not(feature = "help"), expect(unused, reason = "some getters are only used by help"))]
 const MAX_ITER_DEPTH: usize = 4;
 
 /// Description of a self-contained applet.
@@ -60,10 +57,7 @@ impl AppInfo {
     }
 
     pub fn about(&self) -> Doc {
-        Doc {
-            summary: self.about.unwrap_or(""),
-            full: self.long_about.unwrap_or(""),
-        }
+        Doc { summary: self.about.unwrap_or(""), full: self.long_about.unwrap_or("") }
     }
 
     pub fn after_help(&self) -> Option<&'static str> {
@@ -249,13 +243,7 @@ impl NamedArgInfo {
         value_display: &'static [&'static str],
         require_eq: bool,
     ) -> Self {
-        Self {
-            long_names,
-            short_names,
-            value_display,
-            require_eq,
-            doc,
-        }
+        Self { long_names, short_names, value_display, require_eq, doc }
     }
 
     pub fn long_names(&self) -> &[&str] {
@@ -311,17 +299,11 @@ impl CommandInfo {
     // NB. Used by proc-macro.
     #[doc(hidden)]
     pub const fn __new(commands: &'static [(&'static str, &'static ArgsInfo)]) -> Self {
-        Self {
-            commands,
-            catchall: None,
-        }
+        Self { commands, catchall: None }
     }
 
     pub(crate) const fn new_catchall(catchall: &'static ArgsInfo) -> Self {
-        Self {
-            commands: &[],
-            catchall: Some(catchall),
-        }
+        Self { commands: &[], catchall: Some(catchall) }
     }
 
     pub(crate) fn catchall(&self) -> Option<&ArgsInfo> {

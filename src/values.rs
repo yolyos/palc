@@ -60,9 +60,7 @@ impl<T: ValueEnum> InferValueParser<T, &&&&()> {
         impl<T: ValueEnum> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
                 |v| {
-                    let s = v
-                        .to_str()
-                        .ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?;
+                    let s = v.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?;
                     // TODO: better diagnostics?
                     Ok(T::parse_value(s).ok_or_else(|| {
                         ErrorKind::InvalidValue(s.into(), "unknown variant".into())
@@ -93,12 +91,7 @@ impl<T: From<String>> InferValueParser<T, &&()> {
         impl sealed::Sealed for Info {}
         impl<T: From<String>> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
-                |v| {
-                    Ok(v.into_owned()
-                        .into_string()
-                        .map_err(ErrorKind::InvalidUtf8)?
-                        .into())
-                }
+                |v| Ok(v.into_owned().into_string().map_err(ErrorKind::InvalidUtf8)?.into())
             }
         }
         Info

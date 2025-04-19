@@ -64,10 +64,7 @@ fn smoke() {
         MyCli {
             color: Color::Always,
             name: Some("bar".into()),
-            config: Config {
-                config_file: None,
-                config: Some("foo".into())
-            },
+            config: Config { config_file: None, config: Some("foo".into()) },
             debug: true,
             command: Some(Commands::Test {
                 list: true,
