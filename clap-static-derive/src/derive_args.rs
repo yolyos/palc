@@ -583,21 +583,24 @@ impl ToTokens for FeedNamedImpl<'_> {
                 let value_info = value_info(effective_ty);
                 let action = match kind {
                     FieldKind::BoolSetTrue => {
-                        quote! {{ self.#ident = Some(true); __rt::place_for_flag() }}
+                        quote! { __rt::place_for_flag(&mut self.#ident) }
                     }
                     FieldKind::Option => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_set_value::<_, _, #require_eq>(&mut self.#ident, #value_info)
+                        __rt::place_for_set_value::<_, _, #require_eq>(
+                            &mut self.#ident,
+                            #value_info,
+                        )
                     },
                     FieldKind::OptionVec => match value_delimiter {
                         Some(ch) => quote_spanned! {effective_ty.span()=>
                             __rt::place_for_vec_sep::<_, _, #require_eq, #ch>(
-                                self.#ident.get_or_insert_default(),
+                                &mut self.#ident,
                                 #value_info,
                             )
                         },
                         None => quote_spanned! {effective_ty.span()=>
                             __rt::place_for_vec::<_, _, #require_eq>(
-                                self.#ident.get_or_insert_default(),
+                                &mut self.#ident,
                                 #value_info,
                             )
                         },

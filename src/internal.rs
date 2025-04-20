@@ -18,7 +18,13 @@ use super::Error;
 pub trait ArgPlace {
     fn num_values(&self) -> NumValues;
 
-    fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error>;
+    // FIXME: Merge these functions?
+    fn feed(&mut self, _value: Cow<'_, OsStr>) -> Result<(), Error> {
+        unreachable!()
+    }
+    fn feed_none(&mut self) -> Result<(), Error> {
+        unreachable!()
+    }
 }
 
 /// The expected number of values for a named argument to take.
@@ -29,31 +35,31 @@ pub enum NumValues {
 }
 
 #[inline(always)]
-pub fn place_for_flag<'a>() -> &'a mut dyn ArgPlace {
-    struct FlagPlace;
-    impl ArgPlace for FlagPlace {
+pub fn place_for_flag(place: &mut Option<bool>) -> &mut dyn ArgPlace {
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    struct Place(Option<bool>);
+
+    impl ArgPlace for Place {
         fn num_values(&self) -> NumValues {
             NumValues::Zero
         }
-        fn feed(&mut self, _: Cow<'_, OsStr>) -> Result<(), Error> {
-            unreachable!()
+        fn feed_none(&mut self) -> Result<(), Error> {
+            self.0 = Some(true);
+            Ok(())
         }
     }
 
-    // This does no allocation but only initialize it as a dangling reference.
-    // From: <https://github.com/rust-lang/rust/issues/103821#issuecomment-1304004618>
-    let b = Box::leak(Box::new(FlagPlace));
-    debug_assert_eq!(std::ptr::from_ref(b), std::ptr::dangling());
-    b
+    Place::ref_cast_mut(place)
 }
 
 pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
-    place: &mut Vec<T>,
+    place: &mut Option<Vec<T>>,
     _: A,
-) -> &'_ mut dyn ArgPlace {
+) -> &mut dyn ArgPlace {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A, const REQUIRE_EQ: bool>(Vec<T>, PhantomData<A>);
+    struct Place<T, A, const REQUIRE_EQ: bool>(Option<Vec<T>>, PhantomData<A>);
 
     impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool> ArgPlace for Place<T, A, REQUIRE_EQ> {
         fn num_values(&self) -> NumValues {
@@ -61,7 +67,7 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
-            self.0.push(A::parser()(value)?);
+            self.0.get_or_insert_default().push(A::parser()(value)?);
             Ok(())
         }
     }
@@ -70,12 +76,15 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
 }
 
 pub fn place_for_vec_sep<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DELIMITER: char>(
-    place: &mut Vec<T>,
+    place: &mut Option<Vec<T>>,
     _: A,
 ) -> &'_ mut dyn ArgPlace {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A, const REQUIRE_EQ: bool, const DELIMITER: char>(Vec<T>, PhantomData<A>);
+    struct Place<T, A, const REQUIRE_EQ: bool, const DELIMITER: char>(
+        Option<Vec<T>>,
+        PhantomData<A>,
+    );
 
     impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DELIMITER: char> ArgPlace
         for Place<T, A, REQUIRE_EQ, DELIMITER>
@@ -86,8 +95,9 @@ pub fn place_for_vec_sep<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DE
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
             let parser = A::parser();
+            let v = self.0.get_or_insert_default();
             for frag in value.split(DELIMITER) {
-                self.0.push(parser(Cow::Borrowed(frag))?);
+                v.push(parser(Cow::Borrowed(frag))?);
             }
             Ok(())
         }
@@ -153,12 +163,12 @@ pub trait GreedyArgsPlace {
 }
 
 pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
-    place: &mut Vec<T>,
+    place: &mut Option<Vec<T>>,
     _: A,
 ) -> FeedUnnamed<'_> {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A>(Vec<T>, PhantomData<A>);
+    struct Place<T, A>(Option<Vec<T>>, PhantomData<A>);
 
     impl<T, A: ArgValueInfo<T>> GreedyArgsPlace for Place<T, A> {
         fn feed_greedy(
@@ -167,11 +177,13 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
             args: &mut ArgsIter<'_>,
             _global: GlobalAncestors<'_>,
         ) -> Result<()> {
+            let v = self.0.get_or_insert_default();
             if let Some(high) = args.iter.size_hint().1 {
-                self.0.reserve(1 + high);
+                v.reserve(1 + high);
             }
+            let parser = A::parser();
             loop {
-                self.0.push(A::parser()(Cow::Owned(arg))?);
+                v.push(parser(Cow::Owned(arg))?);
                 arg = match args.iter.next() {
                     Some(arg) => arg,
                     None => return Ok(()),
@@ -318,7 +330,10 @@ pub fn try_parse_with_state(
                     },
                 };
                 match place.num_values() {
-                    NumValues::Zero => args.check_no_value()?,
+                    NumValues::Zero => {
+                        args.check_no_value()?;
+                        place.feed_none()?;
+                    }
                     NumValues::One { require_equals: false } => {
                         place.feed(args.take_value()?)?;
                     }
