@@ -23,3 +23,11 @@ argh = { version = "0.1.13", default-features = false }
 clap = { version = "4.5.35", default-features = false, features = ["std", "derive", "error-context", "help", "usage"] }
 
 [workspace]
+
+[profile.minimal]
+inherits = "release"
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

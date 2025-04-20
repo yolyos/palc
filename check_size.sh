@@ -1,12 +1,25 @@
 #!/usr/bin/env bash
 
 filter="$1"
+shift
 flags=(
+    --release
     --no-default-features
     --features __test-allow-unknown-fields
 )
 
-if [[ "$2" = "-d" ]]; then
+# Exclude outline-able std staticlib functions.
+# Locally instantiated generic functions will still be counted.
+if [[ "$1" = "-e" ]]; then
+    shift
+    export RUSTFLAGS="-Cprefer-dynamic $RUSTFLAGS"
+    echo "INFO: Linking to dylib std"
+fi
+
+# Show details.
+if [[ "$1" = "-d" ]]; then
+    shift
+    flags+=( "$@" )
     cargo bloat \
         --example "$filter" \
         "${flags[@]}" \
@@ -15,7 +28,25 @@ if [[ "$2" = "-d" ]]; then
     exit "$?"
 fi
 
-for example in criterion-{clap,argh,static} deno-{clap,static}; do
+# Minimal standalone binary.
+if [[ "$1" = "-m" ]]; then
+    shift
+    flags=(
+        --profile minimal
+        "${flags[@]:1}"
+        -Z build-std=std,panic_abort
+        -Z build-std-features=panic_immediate_abort
+        "$@"
+    )
+    if ! output="$(cargo build --message-format json --example "$filter" "${flags[@]}")"; then
+        exit "$?"
+    fi
+    exepath="$(jq -s -r '.[] | select(.executable != null) .executable' <<<"$output")"
+    ls -lh "$exepath"
+    exit 0
+fi
+
+for example in simple-{clap,argh,static} criterion-{clap,argh,static} deno-{clap,static}; do
     if [[ "$example" != *"$filter"* ]]; then
         continue
     fi
