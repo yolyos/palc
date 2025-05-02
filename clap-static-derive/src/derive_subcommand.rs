@@ -5,8 +5,8 @@ use syn::{DeriveInput, Ident, Type};
 use crate::common::{ErrorCollector, TopCommandMeta, wrap_anon_item};
 use crate::derive_args::ParserStateDefImpl;
 
-pub(crate) fn expand(input: DeriveInput) -> TokenStream {
-    let mut tts = match expand_impl(&input) {
+pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
+    let mut tts = match expand_impl(input) {
         Ok(out) => return wrap_anon_item(out),
         Err(err) => err.into_compile_error(),
     };
@@ -54,7 +54,7 @@ impl ToTokens for VariantImpl<'_> {
                 __rt::try_parse_with_state(&mut __state, __args, __global)?;
                 __rt::ParserState::finish(__state)
             }},
-        })
+        });
     }
 }
 

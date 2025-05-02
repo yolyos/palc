@@ -8,8 +8,8 @@ use crate::common::{
     TopCommandMeta, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
 };
 
-pub fn expand(input: DeriveInput, is_parser: bool) -> TokenStream {
-    let mut tts = match expand_args_impl(&input, is_parser) {
+pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
+    let mut tts = match expand_args_impl(input, is_parser) {
         Ok(out) => return wrap_anon_item(out),
         Err(err) => err.into_compile_error(),
     };
@@ -134,7 +134,8 @@ struct FieldInfo<'i> {
 
     // Docs //
     /// Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
-    name_display: String,
+    /// This may be `None` if all names are hidden.
+    name_display: Option<String>,
     /// Display string for the value, eg. `CONFIG_FILE`.
     value_display: String,
     doc: Doc,
@@ -278,16 +279,16 @@ pub fn expand_state_def_impl<'i>(
             });
         } else if let Some(default) = arg.default_value_t.take() {
             // TODO: Support bool?
-            if !matches!(ty_kind, ArgTyKind::Vec(_) | ArgTyKind::Other) {
-                errs.push(syn::Error::new(
-                    field.ty.span(),
-                    "unsupported type for arg(default_value_t)",
-                ));
-            } else {
+            if matches!(ty_kind, ArgTyKind::Vec(_) | ArgTyKind::Other) {
                 finish = match default {
                     Override::Inherit => FieldFinish::UnwrapDefault,
                     Override::Explicit(expr) => FieldFinish::UnwrapOrExpr(expr.to_token_stream()),
                 }
+            } else {
+                errs.push(syn::Error::new(
+                    field.ty.span(),
+                    "unsupported type for arg(default_value_t)",
+                ));
             }
         }
 
@@ -302,12 +303,12 @@ pub fn expand_state_def_impl<'i>(
         }
 
         let not_none = matches!(finish, FieldFinish::UnwrapChecked);
-        // Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
-        let mut name_display = String::new();
 
         if arg.is_named() {
             // Named arguments.
 
+            // Display string for the argument name, prefer long names, eg. `--config-file`, `-c`.
+            let mut name_display = None;
             let mut arg_names = Vec::new();
 
             if arg.last || arg.trailing_var_arg {
@@ -318,17 +319,6 @@ pub fn expand_state_def_impl<'i>(
                 continue;
             }
 
-            if let Some(ch) = &arg.short {
-                let ch = match ch {
-                    Override::Explicit(c) => *c,
-                    Override::Inherit => ident_str.chars().next().expect("must have name"),
-                };
-                name_display = format!("-{ch}");
-                arg_names.push(ch.to_string());
-            }
-            for &short in arg.short_alias.iter() {
-                arg_names.push(short.to_string());
-            }
             if let Some(name) = &arg.long {
                 let long_name = match name {
                     Override::Inherit => {
@@ -336,13 +326,26 @@ pub fn expand_state_def_impl<'i>(
                     }
                     Override::Explicit(s) => format!("--{s}"),
                 };
+                arg_names.push(long_name.clone());
                 // Prefer long names for display.
-                name_display = long_name.clone();
-                arg_names.push(long_name);
+                name_display = Some(long_name);
             }
             for long in arg.alias.iter() {
                 arg_names.push(format!("--{long}"));
             }
+
+            if let Some(ch) = &arg.short {
+                let ch = match ch {
+                    Override::Explicit(c) => *c,
+                    Override::Inherit => ident_str.chars().next().expect("must have name"),
+                };
+                name_display.get_or_insert_with(|| format!("-{ch}"));
+                arg_names.push(ch.to_string());
+            }
+            for &short in arg.short_alias.iter() {
+                arg_names.push(short.to_string());
+            }
+
             assert!(!arg_names.is_empty());
 
             out.named_fields.push(out.fields.len());
@@ -365,7 +368,7 @@ pub fn expand_state_def_impl<'i>(
                 hide: arg.hide,
             });
         } else {
-            // Unamed arguments.
+            // Unnamed arguments.
 
             if arg.require_equals || arg.global {
                 errs.push(syn::Error::new(
@@ -386,7 +389,6 @@ pub fn expand_state_def_impl<'i>(
                 .value_name
                 .clone()
                 .unwrap_or_else(|| heck::AsShoutySnakeCase(ident_str).to_string());
-            name_display = value_display.clone();
             let is_vec_like = matches!(kind, FieldKind::OptionVec);
             let field_idx = out.fields.len();
             out.fields.push(FieldInfo {
@@ -402,7 +404,7 @@ pub fn expand_state_def_impl<'i>(
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
-                name_display,
+                name_display: Some(value_display.clone()),
                 value_display,
                 doc: arg.doc,
                 hide: arg.hide,
@@ -413,7 +415,6 @@ pub fn expand_state_def_impl<'i>(
                 if let Some(prev) = out.last_field.replace(field_idx) {
                     errs.push(Error::new(ident.span(), "duplicated arg(last)"));
                     errs.push(Error::new(out.fields[prev].ident.span(), "previously defined here"));
-                    continue;
                 }
             } else if is_vec_like {
                 // Variable length unnamed argument.
@@ -463,7 +464,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
                     field_inits.push(quote! { __rt::None });
                 }
-            };
+            }
             field_finishes.push(quote! { self.#ident #finish });
         }
         if let Some(SubcommandInfo { ident, effective_ty, optional }) = self.subcommand {
@@ -765,6 +766,7 @@ impl ToTokens for ValidationImpl<'_> {
         }
 
         for f @ FieldInfo { ident, name_display, .. } in &def.fields {
+            let name_display = name_display.as_deref().unwrap_or_default();
             if f.not_none {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
@@ -812,7 +814,7 @@ impl ToTokens for ValidationImpl<'_> {
                 if self.#ident.is_none() {
                     return __rt::missing_required_subcmd()
                 }
-            })
+            });
         }
     }
 }

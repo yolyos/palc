@@ -22,6 +22,10 @@ required-features = ["__test-allow-unknown-fields"]
 argh = { version = "0.1.13", default-features = false }
 clap = { version = "4.5.35", default-features = false, features = ["std", "derive", "error-context", "help", "usage"] }
 
+[lints.clippy]
+dbg-macro = "warn"
+# TODO: todo = "warn"
+
 [workspace]
 
 [profile.minimal]

@@ -1,3 +1,4 @@
+#![expect(clippy::print_stdout, reason = "Workaround: allowed in tests")]
 use syn::parse_quote;
 
 #[test]
@@ -17,7 +18,7 @@ fn derive_parser() {
         }
     };
 
-    let output = crate::derive_args::expand(input, true);
+    let output = crate::derive_args::expand(&input, true);
     println!("{output}");
     let text = prettyplease::unparse(&syn::parse2(output).unwrap());
     println!("{text}");
@@ -38,7 +39,7 @@ fn derive_subcommand() {
         }
     };
 
-    let output = crate::derive_subcommand::expand(input);
+    let output = crate::derive_subcommand::expand(&input);
     println!("{output}");
     let text = prettyplease::unparse(&syn::parse2(output).unwrap());
     println!("{text}");

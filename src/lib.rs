@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 use std::convert::Infallible;
 use std::ffi::OsString;
 use std::path::PathBuf;

@@ -45,7 +45,7 @@ impl ErrorCollector {
     }
 
     pub fn finish_then<T>(self, v: T) -> syn::Result<T> {
-        self.finish().map(|_| v)
+        self.finish().map(|()| v)
     }
 }
 
@@ -107,9 +107,8 @@ impl ArgTyKind<'_> {
         if let Some(subty) = strip_ty_ctor(ty, TY_OPTION) {
             if let Some(subty) = strip_ty_ctor(subty, TY_VEC) {
                 return ArgTyKind::OptionVec(subty);
-            } else {
-                return ArgTyKind::Option(subty);
             }
+            return ArgTyKind::Option(subty);
         }
         if let Some(subty) = strip_ty_ctor(ty, TY_VEC) {
             return ArgTyKind::Vec(subty);
@@ -145,7 +144,7 @@ impl ArgOrCommand {
             doc.extend_from_attr(attr)?;
             if path.is_ident("arg") {
                 let arg = arg.get_or_insert_default();
-                errs.collect(attr.parse_nested_meta(|meta| arg.parse_update(meta)));
+                errs.collect(attr.parse_nested_meta(|meta| arg.parse_update(&meta)));
             } else if path.is_ident("command") {
                 if let Some(c) = errs.collect(attr.parse_args::<ArgsCommandMeta>()) {
                     if command.is_some() {
@@ -218,7 +217,7 @@ impl ArgMeta {
         self.long.is_some() || self.short.is_some()
     }
 
-    fn parse_update(&mut self, meta: ParseNestedMeta<'_>) -> syn::Result<()> {
+    fn parse_update(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         let path = &meta.path;
         let span = path.span();
         macro_rules! ensure {
@@ -285,7 +284,7 @@ impl ArgMeta {
             check_dup!(default_value);
             self.default_value = Some(meta.value()?.parse()?);
         } else if path.is_ident("default_value_t") || path.is_ident("default_values_t") {
-            parse_unique_override(&mut self.default_value_t, &meta)?;
+            parse_unique_override(&mut self.default_value_t, meta)?;
         } else if path.is_ident("use_value_delimiter") {
             check_true!();
             check_dup!(value_delimiter);
@@ -366,7 +365,7 @@ impl TopCommandMeta {
         for attr in attrs {
             doc.extend_from_attr(attr)?;
             if attr.path().is_ident("command") {
-                errs.collect(attr.parse_nested_meta(|meta| this.parse_update(meta)));
+                errs.collect(attr.parse_nested_meta(|meta| this.parse_update(&meta)));
             } else if attr.path().is_ident("arg") {
                 errs.push(syn::Error::new(
                     attr.span(),
@@ -379,7 +378,7 @@ impl TopCommandMeta {
         errs.finish_then(this)
     }
 
-    fn parse_update(&mut self, meta: ParseNestedMeta<'_>) -> syn::Result<()> {
+    fn parse_update(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         let path = &meta.path;
         if path.is_ident("name") {
             if self.name.is_some() {
@@ -387,13 +386,13 @@ impl TopCommandMeta {
             }
             self.name = Some(meta.value()?.parse()?);
         } else if path.is_ident("version") {
-            parse_unique_override(&mut self.version, &meta)?;
+            parse_unique_override(&mut self.version, meta)?;
         } else if path.is_ident("author") {
-            parse_unique_override(&mut self.author, &meta)?;
+            parse_unique_override(&mut self.author, meta)?;
         } else if path.is_ident("about") {
-            parse_unique_override(&mut self.about, &meta)?;
+            parse_unique_override(&mut self.about, meta)?;
         } else if path.is_ident("long_about") {
-            parse_unique_override(&mut self.long_about, &meta)?;
+            parse_unique_override(&mut self.long_about, meta)?;
         } else if path.is_ident("after_help") {
             self.after_help = Some(meta.value()?.parse()?);
         } else if path.is_ident("after_long_help") {
@@ -540,11 +539,11 @@ impl Doc {
                     let s = s.value();
                     let s = s.trim_ascii();
                     if s.is_empty() {
-                        if !self.0.ends_with("\n") {
+                        if !self.0.ends_with('\n') {
                             self.0.push('\n');
                         }
                     } else {
-                        if !self.0.is_empty() && !self.0.ends_with("\n") {
+                        if !self.0.is_empty() && !self.0.ends_with('\n') {
                             self.0.push(' ');
                         }
                         self.0.push_str(s);
@@ -561,7 +560,7 @@ impl Doc {
     }
 
     pub fn summary(&self) -> &str {
-        self.0.split_once("\n").unwrap_or((&self.0, "")).0
+        self.0.split_once('\n').unwrap_or((&self.0, "")).0
     }
 }
 

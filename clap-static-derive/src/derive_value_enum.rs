@@ -4,8 +4,8 @@ use syn::{DeriveInput, Generics, Ident};
 
 use crate::common::wrap_anon_item;
 
-pub(crate) fn expand(input: DeriveInput) -> TokenStream {
-    let mut tts = match expand_impl(&input) {
+pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
+    let mut tts = match expand_impl(input) {
         Ok(tts) => return wrap_anon_item(tts),
         Err(err) => err.to_compile_error(),
     };
