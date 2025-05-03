@@ -136,16 +136,16 @@ pub type GlobalAncestors<'a> = &'a mut dyn GlobalChain;
 /// `struct Node<'_> { node: &'_ mut dyn ParserStateDyn, parent: Option<&'_ mut Node<'_>> }`
 /// except lifetimes do not work without type erasure (`dyn`).
 pub trait GlobalChain {
-    fn search_global_named(&mut self, _name: &str) -> FeedNamed<'_> {
+    fn search_global_named(&mut self, _enc_name: &str) -> FeedNamed<'_> {
         ControlFlow::Continue(())
     }
 }
 
 impl GlobalChain for () {}
 impl<S: ParserState> GlobalChain for (&mut S, &mut dyn GlobalChain) {
-    fn search_global_named(&mut self, name: &str) -> FeedNamed<'_> {
-        self.0.feed_global_named(name)?;
-        self.1.search_global_named(name)
+    fn search_global_named(&mut self, enc_name: &str) -> FeedNamed<'_> {
+        self.0.feed_global_named(enc_name)?;
+        self.1.search_global_named(enc_name)
     }
 }
 
@@ -251,11 +251,21 @@ pub trait ParserState: ParserStateDyn {
 }
 
 pub trait ParserStateDyn: 'static {
-    fn feed_named(&mut self, name: &str) -> FeedNamed<'_> {
-        let _ = name;
+    /// Try to accept a named argument.
+    ///
+    /// If this parser accepts named argument `name`, return `Break(argument_place)`;
+    /// otherwise, return `Continue(())`.
+    ///
+    /// `enc_name` is the encoded argument name to be matched on:
+    /// - "-s" => "s"
+    /// - "--long" => "long"
+    /// - "--l" => "--l", to disambiguate from short arguments.
+    fn feed_named(&mut self, _enc_name: &str) -> FeedNamed<'_> {
         ControlFlow::Continue(())
     }
 
+    /// Try to accept an unnamed (positional) argument.
+    ///
     /// `idx` is the index of logical arguments, counting each multi-value-argument as one.
     /// `is_last` indices if a `--` has been encountered. It does not effect `idx`.
     fn feed_unnamed(&mut self, arg: &mut OsString, idx: usize, is_last: bool) -> FeedUnnamed {
@@ -314,18 +324,18 @@ pub fn try_parse_with_state(
                     }
                 }
             }
-            Arg::Named(name) => {
-                let place = match state.feed_named(name) {
+            Arg::EncodedNamed(enc_name) => {
+                let place = match state.feed_named(enc_name) {
                     ControlFlow::Break(place) => place,
-                    ControlFlow::Continue(()) => match global.search_global_named(name) {
+                    ControlFlow::Continue(()) => match global.search_global_named(enc_name) {
                         ControlFlow::Break(place) => place,
                         ControlFlow::Continue(()) => {
                             // TODO: Configurable help?
                             #[cfg(feature = "help")]
-                            if name == "h" || name == "--help" {
+                            if enc_name == "h" || enc_name == "help" {
                                 return Err(ErrorKind::Help.into());
                             }
-                            return Err(ErrorKind::UnknownNamedArgument.with_arg(name));
+                            return Err(ErrorKind::UnknownNamedArgument.with_arg(enc_name));
                         }
                     },
                 };
@@ -369,7 +379,7 @@ enum ArgsState {
 #[derive(Debug)]
 enum Arg<'a> {
     DashDash,
-    Named(&'a str),
+    EncodedNamed(&'a str),
     Unnamed(OsString),
 }
 
@@ -446,7 +456,7 @@ impl<'a> ArgsIter<'a> {
                         Ok(s) => {
                             // Invariant: `prev_end..prev_end+len` is checked to be valid UTF-8.
                             self.state = ArgsState::Short { next_pos: next_pos + len };
-                            return Ok(Some(Arg::Named(s)));
+                            return Ok(Some(Arg::EncodedNamed(s)));
                         }
                         // Incomplete encoding.
                         Err(e) if e.error_len().is_none() => {}
@@ -481,8 +491,10 @@ impl<'a> ArgsIter<'a> {
                 self.state = ArgsState::Long { eq_pos: None };
                 argb.len()
             };
-            let s = self.cur_input_arg.index(..end);
-            Arg::Named(s.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?)
+            // Include preceeding "--" only for single-char long arguments.
+            let start = if end == 3 { 0 } else { 2 };
+            let s = self.cur_input_arg.index(start..end);
+            Arg::EncodedNamed(s.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?)
         } else if argb.starts_with(b"-") {
             self.state = ArgsState::Short { next_pos: 1 };
             return self.cache_next_arg();
