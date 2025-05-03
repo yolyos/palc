@@ -324,26 +324,26 @@ pub fn expand_state_def_impl<'i>(
                     Override::Inherit => {
                         format!("--{}", heck::AsKebabCase(&ident_str))
                     }
-                    Override::Explicit(s) => format!("--{s}"),
+                    Override::Explicit(s) => format!("--{}", s.value()),
                 };
                 arg_names.push(long_name.clone());
                 // Prefer long names for display.
                 name_display = Some(long_name);
             }
             for long in arg.alias.iter() {
-                arg_names.push(format!("--{long}"));
+                arg_names.push(format!("--{}", long.value()));
             }
 
             if let Some(ch) = &arg.short {
                 let ch = match ch {
-                    Override::Explicit(c) => *c,
+                    Override::Explicit(c) => c.value(),
                     Override::Inherit => ident_str.chars().next().expect("must have name"),
                 };
                 name_display.get_or_insert_with(|| format!("-{ch}"));
                 arg_names.push(ch.to_string());
             }
-            for &short in arg.short_alias.iter() {
-                arg_names.push(short.to_string());
+            for short in arg.short_alias.iter() {
+                arg_names.push(short.value().to_string());
             }
 
             assert!(!arg_names.is_empty());
@@ -385,10 +385,10 @@ pub fn expand_state_def_impl<'i>(
                 continue;
             }
 
-            let value_display = arg
-                .value_name
-                .clone()
-                .unwrap_or_else(|| heck::AsShoutySnakeCase(ident_str).to_string());
+            let value_display = match &arg.value_name {
+                Some(s) => s.value(),
+                None => heck::AsShoutySnakeCase(ident_str).to_string(),
+            };
             let is_vec_like = matches!(kind, FieldKind::OptionVec);
             let field_idx = out.fields.len();
             out.fields.push(FieldInfo {

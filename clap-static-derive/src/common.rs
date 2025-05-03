@@ -174,11 +174,11 @@ pub struct ArgMeta {
     pub doc: Doc,
 
     // Names.
-    pub long: Option<Override<String>>,
-    pub short: Option<Override<char>>,
-    pub alias: OneOrArray<String>,
-    pub short_alias: OneOrArray<char>,
-    pub value_name: Option<String>,
+    pub long: Option<Override<LitStr>>,
+    pub short: Option<Override<LitChar>>,
+    pub alias: OneOrArray<LitStr>,
+    pub short_alias: OneOrArray<LitChar>,
+    pub value_name: Option<LitStr>,
     // TODO: {,visible_}{,short_}alias{,es}, value_names
 
     // Named argument behaviors.
@@ -199,8 +199,8 @@ pub struct ArgMeta {
     // Not needed: required
 
     // Help & completion.
-    pub help: Option<String>,
-    pub long_help: Option<String>,
+    pub help: Option<LitStr>,
+    pub long_help: Option<LitStr>,
     pub hide: bool,
     // TODO: add, hide_*, next_line_help, help_heading, display_order
 
@@ -243,31 +243,17 @@ impl ArgMeta {
 
         if path.is_ident("long") {
             check_dup!(long);
-            self.long = Some(if meta.input.peek(Token![=]) {
-                let v = meta.value()?.parse::<LitStr>()?.value();
-                Override::Explicit(v)
-            } else {
-                Override::Inherit
-            });
+            self.long = Some(meta.input.parse()?);
         } else if path.is_ident("short") {
             check_dup!(short);
-            self.short = Some(if meta.input.peek(Token![=]) {
-                let v = meta.value()?.parse::<LitChar>()?.value();
-                Override::Explicit(v)
-            } else {
-                Override::Inherit
-            });
+            self.short = Some(meta.input.parse()?);
         } else if path.is_ident("alias") || path.is_ident("aliases") {
-            self.alias.extend(
-                meta.value()?.parse::<OneOrArray<LitStr>>()?.into_iter().map(|s| s.value()),
-            );
+            self.alias.extend(meta.value()?.parse::<OneOrArray<LitStr>>()?);
         } else if path.is_ident("short_alias") || path.is_ident("short_aliases") {
-            self.short_alias.extend(
-                meta.value()?.parse::<OneOrArray<LitChar>>()?.into_iter().map(|s| s.value()),
-            );
+            self.short_alias.extend(meta.value()?.parse::<OneOrArray<LitChar>>()?);
         } else if path.is_ident("value_name") {
             check_dup!(value_name);
-            self.value_name = Some(meta.value()?.parse::<LitStr>()?.value());
+            self.value_name = Some(meta.value()?.parse::<LitStr>()?);
         } else if path.is_ident("require_equals") {
             check_true!();
             self.require_equals = true;
@@ -294,10 +280,10 @@ impl ArgMeta {
             self.value_delimiter = Some(meta.value()?.parse::<syn::LitChar>()?);
         } else if path.is_ident("help") {
             check_dup!(help);
-            self.help = Some(meta.value()?.parse::<LitStr>()?.value());
+            self.help = Some(meta.value()?.parse::<LitStr>()?);
         } else if path.is_ident("long_help") {
             check_dup!(long_help);
-            self.help = Some(meta.value()?.parse::<LitStr>()?.value());
+            self.help = Some(meta.value()?.parse::<LitStr>()?);
         } else if path.is_ident("hide") {
             check_true!();
             self.hide = true;
