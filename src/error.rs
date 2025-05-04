@@ -109,7 +109,7 @@ impl fmt::Display for Error {
             #[cfg(feature = "help")]
             ErrorKind::Help => {
                 let mut out = String::new();
-                crate::help::generate(&self.0.subcommand_path, &mut out).unwrap();
+                crate::help::render_help_into(&mut out, &self.0.subcommand_path);
                 f.write_str(&out)
             }
 

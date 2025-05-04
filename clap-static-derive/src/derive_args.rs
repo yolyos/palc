@@ -305,6 +305,7 @@ pub fn expand_state_def_impl<'i>(
                 "arg(short) name must NOT be '-' or ASCII control characters",
             ));
         } else if !c.is_ascii() {
+            // NB. It is assumed to be ASCII in `refl::NamedArgInfo::short_args()`.
             errs.push(syn::Error::new(
                 name.span(),
                 r#"Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \

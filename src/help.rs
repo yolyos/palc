@@ -1,12 +1,22 @@
-use std::fmt::Write;
-
 use crate::refl::{CommandInfo, RawCommandInfo};
 
 /// List of (arg_info, subcommand) context, in reverse order.
 /// The last element (outermost command) is the top-level command.
 pub(crate) type SubcommandPath = Vec<(&'static RawCommandInfo, String)>;
 
-pub(crate) fn generate(rev_path: &SubcommandPath, out: &mut String) -> std::fmt::Result {
+#[inline(never)]
+fn push_str(out: &mut String, s: &str) {
+    out.push_str(s);
+}
+
+#[cold]
+pub(crate) fn render_help_into(out: &mut String, rev_path: &SubcommandPath) {
+    macro_rules! w {
+        ($($e:expr),*) => {{
+            $(push_str(out, $e);)*
+        }};
+    }
+
     let path = rev_path
         .iter()
         .rev()
@@ -23,16 +33,16 @@ pub(crate) fn generate(rev_path: &SubcommandPath, out: &mut String) -> std::fmt:
     // About this (sub)command.
     let cmd_doc = info.doc().expect("doc is enabled");
     if let Some(about) = cmd_doc.long_about() {
-        writeln!(out, "{about}")?;
+        w!(about, "\n");
     }
-    writeln!(out)?;
+    w!("\n");
 
     // Usage of current subcommand path.
 
-    write!(out, "Usage:")?;
+    w!("Usage:");
     // Argv0 is included.
     for (cmd, _) in path.iter() {
-        write!(out, " {cmd}")?;
+        w!(" ", cmd);
     }
 
     let mut has_named @ mut has_unnamed = false;
@@ -40,59 +50,59 @@ pub(crate) fn generate(rev_path: &SubcommandPath, out: &mut String) -> std::fmt:
     for arg in info.named_args() {
         has_named = true;
         if let Some(name) = arg.long_names().next() {
-            write!(out, " --{name}")?;
+            w!(" --", name);
         } else {
-            write!(out, " -{}", arg.short_names().next().unwrap())?;
+            w!(" -", arg.short_names().next().unwrap().encode_utf8(&mut [0u8; 4]));
         }
         // TODO: Multi-value.
         if let Some(value_name) = arg.value_names().next() {
-            let sep = if arg.requires_eq() { "=" } else { " " };
-            write!(out, "{sep}<{value_name}>")?;
+            let start = if arg.requires_eq() { "=<" } else { " <" };
+            w!(start, value_name, ">");
         }
     }
     for arg in info.unnamed_args() {
         has_unnamed = true;
         if arg.greedy() {
-            write!(out, " [{}]...", arg.value_names().next().unwrap())?;
+            w!(" [", arg.value_names().next().unwrap(), "]...");
         } else {
             for value_name in arg.value_names() {
-                write!(out, " <{value_name}>")?;
+                w!(" <", value_name, ">");
             }
         }
     }
     let subcmd = info.subcommand();
     if subcmd.is_some() {
-        out.write_str(if info.is_subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" })?;
+        w!(if info.is_subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" });
     }
-    writeln!(out)?;
+    w!("\n");
 
     // List of commands.
 
     if let Some(subcmd) = &subcmd {
-        writeln!(out, "\nCommands:")?;
+        w!("\nCommands:\n");
         for (cmd, _) in subcmd.iter() {
             // TODO: Description.
-            writeln!(out, "    {cmd}")?;
+            w!("    ", cmd, "\n");
         }
     }
 
     // List of unnamed arguments.
 
     if has_unnamed {
-        writeln!(out, "\nArguments:")?;
+        w!("\nArguments:\n");
         for (i, arg) in info.unnamed_args().enumerate() {
             if i > 0 {
-                writeln!(out)?;
+                w!("\n");
             }
             for value_name in arg.value_names() {
-                writeln!(out, "  <{value_name}>")?;
+                w!("  <", value_name, ">\n");
             }
             if let Some(help) = arg.long_help() {
                 for (j, s) in help.split_terminator('\n').enumerate() {
                     if j > 0 {
-                        writeln!(out)?;
+                        w!("\n");
                     }
-                    writeln!(out, "          {s}")?;
+                    w!("          ", s, "\n");
                 }
             }
         }
@@ -101,36 +111,36 @@ pub(crate) fn generate(rev_path: &SubcommandPath, out: &mut String) -> std::fmt:
     // List of named arguments.
 
     if has_named {
-        writeln!(out, "\nOptions:")?;
+        w!("\nOptions:\n");
 
         for arg in info.named_args() {
             match (arg.short_names().next(), arg.long_names().next()) {
                 (None, None) => unreachable!(),
-                (None, Some(long)) => write!(out, "      --{long}"),
-                (Some(short), None) => write!(out, "  -{short}"),
-                (Some(short), Some(long)) => write!(out, "  -{short}, --{long}"),
-            }?;
+                (None, Some(long)) => w!("      --", long),
+                (Some(short), None) => w!("  -", short.encode_utf8(&mut [0u8; 4])),
+                (Some(short), Some(long)) => {
+                    w!("  -", short.encode_utf8(&mut [0u8; 4]), "--", long)
+                }
+            };
             // TODO: Multi-value.
             if let Some(value_name) = arg.value_names().next() {
-                let sep = if arg.requires_eq() { "=" } else { " " };
-                write!(out, "{sep}<{value_name}>")?;
+                let start = if arg.requires_eq() { "=<" } else { " <" };
+                w!(start, value_name, ">");
             }
-            writeln!(out)?;
+            w!("\n");
             if let Some(help) = arg.long_help() {
                 for (j, s) in help.split_terminator('\n').enumerate() {
                     if j != 0 {
-                        writeln!(out)?;
+                        w!("\n");
                     }
-                    writeln!(out, "          {s}")?;
+                    w!("          ", s, "\n");
                 }
             }
-            writeln!(out)?;
+            w!("\n");
         }
     }
 
     if let Some(after) = cmd_doc.after_long_help() {
-        out.write_str(after)?;
+        w!(after);
     }
-
-    Ok(())
 }

@@ -1,7 +1,4 @@
 // TODO: Better Debug impl for structs in this mod.
-fn opt(s: &str) -> Option<&str> {
-    if s.is_empty() { None } else { Some(s) }
-}
 
 /// Description of a collection of arguments.
 ///
@@ -70,7 +67,7 @@ impl ArgsInfo {
 
     pub fn args(&self) -> impl Iterator<Item = ArgInfo> {
         // See `RawArgsInfo`.
-        self.raw_args.split_terminator('\0').map(ArgInfo::from_raw)
+        split_terminator(self.raw_args, b'\0').map(ArgInfo::from_raw)
     }
 
     pub fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
@@ -89,16 +86,11 @@ impl ArgsInfo {
         self.is_subcommand_optional
     }
 
+    #[inline(never)]
     pub fn doc(&self) -> Option<CommandDoc> {
         // See `RawArgsInfo`.
-        let mut it = self.raw_doc.splitn(7, '\0');
-        let name = it.next()?;
-        let version = opt(it.next()?);
-        let author = opt(it.next()?);
-        let about = opt(it.next()?);
-        let long_about = opt(it.next()?);
-        let after_help = opt(it.next()?);
-        let after_long_help = opt(it.next()?);
+        let [name, version, author, about, long_about, after_help, after_long_help] =
+            split_sep_many(self.raw_doc, b'\0')?;
         Some(CommandDoc { name, version, author, about, long_about, after_help, after_long_help })
     }
 }
@@ -112,15 +104,13 @@ pub enum ArgInfo {
 
 impl ArgInfo {
     // See `RawArgsInfo`.
+    #[inline(never)]
     fn from_raw(raw: &'static str) -> Self {
         (|| {
-            let mut it = raw.splitn(6, '\n');
-            let raw_short_names = it.next()?;
-            let raw_long_names = it.next()?;
-            let raw_value_names = it.next()?;
-            let require_eq = it.next()? == "1";
-            let greedy = it.next()? == "1";
-            let long_help = it.next()?;
+            let [raw_short_names, raw_long_names, raw_value_names, require_eq, greedy, long_help] =
+                split_sep_many(raw, b'\n')?;
+            let require_eq = require_eq == "1";
+            let greedy = greedy == "1";
             Some(if !raw_short_names.is_empty() || !raw_long_names.is_empty() {
                 Self::Named(NamedArgInfo {
                     raw_short_names,
@@ -163,17 +153,18 @@ pub struct NamedArgInfo {
 
 impl NamedArgInfo {
     pub fn short_names(&self) -> impl Iterator<Item = char> {
-        self.raw_short_names.chars()
+        // NB. Currently short names are always ASCII.
+        self.raw_short_names.bytes().map(|b| b as char)
     }
 
     pub fn long_names(&self) -> impl Iterator<Item = &'static str> {
         // See `RawArgInfo`
-        self.raw_long_names.split_terminator('\t').filter(|s| !s.is_empty())
+        split_terminator(self.raw_long_names, b'\t').filter(|s| !s.is_empty())
     }
 
     pub fn value_names(&self) -> impl Iterator<Item = &'static str> {
         // See `RawArgInfo`
-        self.raw_value_names.split_terminator('\t').filter(|s| !s.is_empty())
+        split_terminator(self.raw_value_names, b'\t').filter(|s| !s.is_empty())
     }
 
     pub fn requires_eq(&self) -> bool {
@@ -200,7 +191,7 @@ pub struct UnnamedArgInfo {
 impl UnnamedArgInfo {
     pub fn value_names(&self) -> impl Iterator<Item = &'static str> {
         // See `ArgInfo::from_raw`
-        self.raw_value_names.split_terminator('\t')
+        split_terminator(self.raw_value_names, b'\t')
     }
 
     pub fn greedy(&self) -> bool {
@@ -265,7 +256,7 @@ impl SubcommandInfo {
 
     pub fn iter(&self) -> impl Iterator<Item = (&'static str, ArgsInfo)> {
         std::iter::zip(
-            self.0.__raw_names.split_terminator('\t'),
+            split_terminator(self.0.__raw_names, b'\t'),
             self.0.__subcommands.iter().map(ArgsInfo::from_raw),
         )
     }
@@ -279,12 +270,12 @@ impl SubcommandInfo {
 #[derive(Debug, Clone, Copy)]
 pub struct CommandDoc {
     name: &'static str,
-    version: Option<&'static str>,
-    author: Option<&'static str>,
-    about: Option<&'static str>,
-    long_about: Option<&'static str>,
-    after_help: Option<&'static str>,
-    after_long_help: Option<&'static str>,
+    version: &'static str,
+    author: &'static str,
+    about: &'static str,
+    long_about: &'static str,
+    after_help: &'static str,
+    after_long_help: &'static str,
 }
 
 impl CommandDoc {
@@ -293,26 +284,56 @@ impl CommandDoc {
     }
 
     pub fn version(&self) -> Option<&str> {
-        self.version
+        opt(self.version)
     }
 
     pub fn author(&self) -> Option<&str> {
-        self.author
+        opt(self.author)
     }
 
     pub fn about(&self) -> Option<&str> {
-        self.about
+        opt(self.about)
     }
 
     pub fn long_about(&self) -> Option<&str> {
-        self.long_about
+        opt(self.long_about)
     }
 
     pub fn after_help(&self) -> Option<&str> {
-        self.after_help
+        opt(self.after_help)
     }
 
     pub fn after_long_help(&self) -> Option<&str> {
-        self.after_long_help
+        opt(self.after_long_help)
     }
+}
+
+fn opt(s: &str) -> Option<&str> {
+    if s.is_empty() { None } else { Some(s) }
+}
+
+#[inline(never)]
+fn split_once(s: &str, b: u8) -> Option<(&str, &str)> {
+    assert!(b.is_ascii());
+    s.split_once(b as char)
+}
+
+fn split_sep_many<const N: usize>(mut s: &str, b: u8) -> Option<[&str; N]> {
+    assert!(b.is_ascii());
+    let mut arr = [""; N];
+    let (last, init) = arr.split_last_mut().unwrap();
+    for p in init {
+        (*p, s) = split_once(s, b)?;
+    }
+    *last = s;
+    Some(arr)
+}
+
+fn split_terminator(mut s: &str, b: u8) -> impl Iterator<Item = &str> {
+    assert!(b.is_ascii());
+    std::iter::from_fn(move || {
+        let (fst, rest) = split_once(s, b)?;
+        s = rest;
+        Some(fst)
+    })
 }
