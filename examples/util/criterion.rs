@@ -9,7 +9,7 @@ use super::{Parser, ValueEnum};
 #[derive(Parser)]
 #[command(
     name = "Criterion Benchmark",
-    after_help = "
+    after_long_help = "
 This executable is a Criterion.rs benchmark.
 See https://github.com/bheisler/criterion.rs for more details.
 

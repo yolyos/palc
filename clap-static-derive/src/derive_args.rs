@@ -6,9 +6,10 @@ use syn::spanned::Spanned;
 use syn::{DeriveInput, Error, Ident, LitChar, LitStr, Visibility};
 
 use crate::common::{
-    ArgOrCommand, ArgTyKind, ArgsCommandMeta, Doc, ErrorCollector, FieldPath, Override, TY_OPTION,
-    TopCommandMeta, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
+    ArgOrCommand, ArgTyKind, ArgsCommandMeta, CommandMeta, Doc, ErrorCollector, FieldPath,
+    Override, TY_OPTION, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
 };
+use crate::derive_subcommand::RawCommandInfo;
 
 pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
     let mut tts = match expand_args_impl(input, is_parser) {
@@ -29,6 +30,9 @@ pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
         impl __rt::ArgsInternal for #name {
             type __State = __rt::FallbackState<#name>;
         }
+
+        #[automatically_derived]
+        impl __rt::CommandInternal for #name {}
     }));
     tts
 }
@@ -53,12 +57,22 @@ fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<
     }
 
     let mut errs = ErrorCollector::default();
-    let cmd_meta = errs.collect(TopCommandMeta::parse_attrs(&def.attrs));
+    let parser_cmd_meta = if is_parser {
+        errs.collect(CommandMeta::parse_attrs(&def.attrs))
+    } else {
+        // TODO: Reject `command()` here.
+        None
+    };
 
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
-    let state =
-        errs.collect(expand_state_def_impl(&def.vis, cmd_meta, state_name, struct_name, fields));
+    let state = errs.collect(expand_state_def_impl(
+        &def.vis,
+        parser_cmd_meta,
+        state_name,
+        struct_name,
+        fields,
+    ));
 
     errs.finish()?;
     Ok(ArgsImpl { is_parser, state: state.unwrap() })
@@ -66,14 +80,29 @@ fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<
 
 impl ToTokens for ArgsImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Self { is_parser, state } = self;
-        let struct_name = &state.output_ty;
-        let state_name = &state.state_name;
+        let struct_name = &self.state.output_ty;
+        let state_name = &self.state.state_name;
+        let state = &self.state;
 
-        if *is_parser {
+        if self.is_parser {
+            let raw_cmd_info = RawCommandInfo::Args { state_name: &self.state.state_name };
+
             tokens.extend(quote! {
                 #[automatically_derived]
                 impl __rt::Parser for #struct_name {}
+
+                #[automatically_derived]
+                impl __rt::CommandInternal for #struct_name {
+                    const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
+
+                    fn try_parse_with_name(
+                        __name: &str,
+                        __args: &mut __rt::ArgsIter<'_>,
+                        __global: __rt::GlobalAncestors<'_>,
+                    ) -> __rt::Result<Self> {
+                        __rt::try_parse_args(__args, __global)
+                    }
+                }
             });
         }
 
@@ -110,7 +139,7 @@ pub struct ParserStateDefImpl<'i> {
     catchall_field: Option<CatchallFieldInfo>,
     last_field: Option<usize>,
 
-    cmd_attrs: Option<TopCommandMeta>,
+    cmd_meta: Option<CommandMeta>,
 }
 
 struct FieldInfo<'i> {
@@ -123,6 +152,8 @@ struct FieldInfo<'i> {
 
     // Arg configurables //
     /// Matching names for named arguments. Empty for unnamed arguments.
+    short_names: String,
+    long_names: Vec<String>,
     arg_name_matchee: Vec<LitStr>,
     require_eq: bool,
     global: bool,
@@ -201,7 +232,7 @@ impl ToTokens for FieldFinish {
 
 pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
-    cmd_attrs: Option<TopCommandMeta>,
+    cmd_meta: Option<CommandMeta>,
     state_name: Ident,
     output_ty: TokenStream,
     input_fields: &'i syn::FieldsNamed,
@@ -224,7 +255,7 @@ pub fn expand_state_def_impl<'i>(
         unnamed_fields: Vec::new(),
         catchall_field: None,
         last_field: None,
-        cmd_attrs,
+        cmd_meta,
     };
 
     let mut variable_len_arg_span = None;
@@ -387,6 +418,8 @@ pub fn expand_state_def_impl<'i>(
                 continue;
             }
 
+            let mut long_names = Vec::new();
+            let mut short_names = String::new();
             if let Some(name) = arg.long {
                 let name = match name {
                     Override::Inherit => {
@@ -394,11 +427,13 @@ pub fn expand_state_def_impl<'i>(
                     }
                     Override::Explicit(name) => name,
                 };
+                long_names.push(name.value());
                 let (matchee, display) = cvt_long_name(name, &mut errs);
                 arg_name_matchee.push(matchee);
                 name_display = Some(display);
             }
             for name in arg.alias {
+                long_names.push(name.value());
                 let (matchee, _) = cvt_long_name(name, &mut errs);
                 arg_name_matchee.push(matchee);
             }
@@ -411,11 +446,13 @@ pub fn expand_state_def_impl<'i>(
                         ident.span(),
                     ),
                 };
+                short_names.push(name.value());
                 let (matchee, display) = cvt_short_name(name, &mut errs);
                 arg_name_matchee.push(matchee);
                 name_display.get_or_insert(display);
             }
             for name in arg.short_alias {
+                short_names.push(name.value());
                 let (matchee, _) = cvt_short_name(name, &mut errs);
                 arg_name_matchee.push(matchee);
             }
@@ -428,6 +465,8 @@ pub fn expand_state_def_impl<'i>(
                 kind,
                 effective_ty,
                 finish,
+                short_names,
+                long_names,
                 arg_name_matchee,
                 require_eq: arg.require_equals,
                 global: arg.global,
@@ -466,6 +505,8 @@ pub fn expand_state_def_impl<'i>(
                 kind,
                 effective_ty,
                 finish,
+                short_names: String::new(),
+                long_names: Vec::new(),
                 arg_name_matchee: Vec::new(),
                 require_eq: false,
                 global: false,
@@ -578,7 +619,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let flatten_tys = self.flatten_fields.iter().map(|f| f.effective_ty);
         let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
 
-        let args_info_lit = ArgsInfoLiteral(self);
+        let raw_args_info = RawArgsInfo(self);
 
         tokens.extend(quote! {
             // FIXME: Visibility is still broken with `command(flatten)`.
@@ -593,7 +634,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 type Output = #output_ty;
                 type Subcommand = #subcommand_ty;
 
-                const ARGS_INFO: __rt::ArgsInfo = #args_info_lit;
+                const RAW_ARGS_INFO: __rt::RawArgsInfo = #raw_args_info;
                 const TOTAL_UNNAMED_ARG_CNT: __rt::usize =
                     #self_unnamed_arg_cnt #(+ <<#flatten_tys as __rt::ArgsInternal>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
@@ -889,153 +930,116 @@ impl ToTokens for ValidationImpl<'_> {
     }
 }
 
-/// Generates the reflection constant with type `ArgsInfo`.
-struct ArgsInfoLiteral<'a>(&'a ParserStateDefImpl<'a>);
+/// Generates the reflection constant for `const RAW_ARGS_INFO`.
+struct RawArgsInfo<'a>(&'a ParserStateDefImpl<'a>);
 
-impl ToTokens for ArgsInfoLiteral<'_> {
+impl ToTokens for RawArgsInfo<'_> {
+    // See format in `RawArgInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let ParserStateDefImpl {
-            fields,
-            named_fields,
-            unnamed_fields,
-            catchall_field,
-            last_field,
-            flatten_fields,
-            cmd_attrs,
-            ..
-        } = self.0;
+        let mut buf = String::new();
+        let greedy_idx = self.0.catchall_field.and_then(|c| c.greedy.then_some(c.field_idx));
 
-        let named_args = named_fields.iter().filter(|&&i| !fields[i].hide).map(|&i| {
-            let FieldInfo { value_display, require_eq, kind, doc, .. } = &fields[i];
-            let values = match kind {
-                FieldKind::BoolSetTrue => quote! { [] },
-                FieldKind::Option | FieldKind::OptionVec => quote! { [#value_display] },
+        for (idx, f) in self.0.fields.iter().enumerate().filter(|(_, f)| !f.hide) {
+            buf.push_str(&f.short_names);
+            buf.push('\n');
+            for long in &f.long_names {
+                buf.push_str(long);
+                buf.push('\t');
+            }
+            buf.push('\n');
+            match f.kind {
+                FieldKind::BoolSetTrue => {}
+                FieldKind::Option | FieldKind::OptionVec => {
+                    buf.push_str(&f.value_display.value());
+                    buf.push('\t');
+                }
+            }
+            buf.push('\n');
+            buf.push(if f.require_eq { '1' } else { '0' });
+            buf.push('\n');
+            buf.push(if Some(idx) == greedy_idx { '1' } else { '0' });
+            buf.push('\n');
+            buf.push_str(&f.doc.0);
+            buf.push('\0');
+        }
+
+        let raw_args = if self.0.flatten_fields.is_empty() {
+            quote! { #buf }
+        } else {
+            let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
+            // FIXME: Reject if flatten args have subcommand.
+            quote! {
+                __rt::const_concat!(
+                    #buf,
+                    #(<<#tys as __rt::ArgsInternal>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args),*
+                )
+            }
+        };
+
+        let (is_subcmd_optional, subcmd) = if let Some(s) = &self.0.subcommand {
+            let ty = &s.effective_ty;
+            (s.optional, quote! {__rt::Some(<#ty as __rt::CommandInternal>::RAW_COMMAND_INFO) })
+        } else {
+            (false, quote! { __rt::None })
+        };
+        let subcmd_optional = if is_subcmd_optional { "1" } else { "0" };
+
+        let raw_meta = if let Some(m) = &self.0.cmd_meta {
+            let name = match &m.name {
+                Some(s) => quote! { #s },
+                None => quote! { __rt::env!("CARGO_PKG_NAME") },
+            };
+            let version = match &m.version {
+                Some(Override::Explicit(s)) => quote! { #s },
+                Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_VERSION") },
+                None => quote! { "" },
+            };
+            let author = match &m.author {
+                Some(Override::Explicit(s)) => quote! { #s },
+                Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_AUTHORS") },
+                None => quote! { "" },
+            };
+            // TODO: Compress this if it is the first line of `long_about`.
+            let about = match &m.long_about {
+                Some(Override::Explicit(s)) => quote! { #s },
+                Some(Override::Inherit) => m.doc.summary().to_token_stream(),
+                None => quote! { "" },
+            };
+            let long_about = match &m.long_about {
+                Some(Override::Explicit(s)) => quote! { #s },
+                Some(Override::Inherit) => m.doc.to_token_stream(),
+                None => quote! { "" },
+            };
+            let after_help = match &m.after_help {
+                Some(e) => quote! { #e },
+                None => quote! { "" },
+            };
+            let after_long_help = match &m.after_long_help {
+                Some(e) => quote! { #e },
+                None => quote! { "" },
             };
             quote! {
-                __rt::refl::NamedArgInfo::__new(
-                    #doc,
-                    // TODO: arg names.
-                    &[],
-                    &[],
-                    &#values,
-                    #require_eq,
+                __rt::const_concat!(
+                    #subcmd_optional,
+                    #name, "\0",
+                    #version, "\0",
+                    #author, "\0",
+                    #about, "\0",
+                    #long_about, "\0",
+                    #after_help, "\0",
+                    #after_long_help
                 )
             }
-        });
-        let unnamed_args = unnamed_fields.iter().filter(|&&i| !fields[i].hide).map(|&i| {
-            let FieldInfo { doc, value_display, .. } = &fields[i];
-            quote! { __rt::refl::UnnamedArgInfo::__new(#doc, #value_display) }
-        });
-        let mut trailing_var_arg = quote! { __rt::None };
-        let mut subcmd = trailing_var_arg.clone();
-        if let Some(CatchallFieldInfo { field_idx, greedy }) = *catchall_field {
-            let FieldInfo { doc, value_display, hide, .. } = &self.0.fields[field_idx];
-            if !hide {
-                trailing_var_arg = quote! {
-                    Some((#greedy, __rt::refl::UnnamedArgInfo::__new(#doc, #value_display)))
-                };
-            }
-        }
-        if let Some(SubcommandInfo { effective_ty, optional, .. }) = self.0.subcommand {
-            subcmd = quote! {
-                Some((#optional, <#effective_ty as __rt::CommandInternal>::COMMAND_INFO))
-            };
-        }
-        let last_arg = match last_field.map(|i| &fields[i]) {
-            Some(FieldInfo { hide, doc, value_display, .. }) if !hide => {
-                quote! { __rt::Some(__rt::refl::UnnamedArgInfo::__new(#doc, #value_display)) }
-            }
-            _ => quote! { __rt::None },
-        };
-        let flatten_args =
-            flatten_fields
-                .iter()
-                .map(|FlattenFieldInfo { effective_ty, .. }| {
-                    quote! { &<<#effective_ty as __rt::ArgsInternal>::__State as __rt::ParserState>::ARGS_INFO }
-                });
-
-        let app_info = AppInfoLiteral(cmd_attrs.as_ref());
-
-        tokens.extend(quote! {
-            __rt::refl::ArgsInfo::__new(
-                &[#(#named_args),*],
-                &[#(#unnamed_args),*],
-                #trailing_var_arg,
-                #subcmd,
-                #last_arg,
-                &[#(#flatten_args),*],
-                #app_info,
-            )
-        });
-    }
-}
-
-/// Generates the reflection constant with type `Option<&'static AppInfo>`.
-struct AppInfoLiteral<'i>(Option<&'i TopCommandMeta>);
-
-impl ToTokens for AppInfoLiteral<'_> {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let Some(TopCommandMeta {
-            doc,
-            name,
-            version,
-            author,
-            about,
-            long_about,
-            after_help,
-            after_long_help,
-        }) = self.0
-        else {
-            tokens.extend(quote! { __rt::None });
-            return;
-        };
-
-        let name = match name {
-            Some(s) => quote! { #s },
-            None => quote! { __rt::env!("CARGO_PKG_NAME") },
-        };
-        let version = match version {
-            Some(Override::Explicit(s)) => quote! { #s },
-            Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_VERSION") },
-            None => quote! { "" },
-        };
-        let author = match author {
-            Some(Override::Explicit(s)) => quote! { #s },
-            Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_AUTHORS") },
-            None => quote! { "" },
-        };
-        let about = match about {
-            Some(Override::Explicit(s)) => quote! { #s },
-            Some(Override::Inherit) => doc.summary().to_token_stream(),
-            None => quote! { "" },
-        };
-        let long_about = match long_about {
-            Some(Override::Explicit(s)) => quote! { #s },
-            Some(Override::Inherit) => doc.to_token_stream(),
-            None => quote! { "" },
-        };
-        let after_help = match after_help {
-            Some(e) => quote! { #e },
-            None => quote! { "" },
-        };
-        let after_long_help = match after_long_help {
-            Some(e) => quote! { #e },
-            None => quote! { "" },
+        } else {
+            quote! { "0" }
         };
 
         tokens.extend(quote! {
-            // Force promote in case of any arguments referencing statics.
-            __rt::Some(&const {
-                __rt::refl::AppInfo::__new(
-                    #name,
-                    #version,
-                    #author,
-                    #about,
-                    #long_about,
-                    #after_help,
-                    #after_long_help,
-                )
-            })
+            __rt::RawArgsInfo {
+                __subcommand: #subcmd,
+                __raw_args: #raw_args,
+                __raw_meta: #raw_meta,
+            }
         });
     }
 }

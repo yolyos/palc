@@ -135,13 +135,13 @@ impl Error {
     }
 
     #[cfg(feature = "help")]
-    pub(crate) fn in_subcommand<C: CommandInternal>(mut self, name: String) -> Self {
-        self.0.subcommand_path.push((name, C::COMMAND_INFO));
+    pub(crate) fn in_subcommand<C: CommandInternal>(mut self, subcmd: String) -> Self {
+        self.0.subcommand_path.push((C::RAW_COMMAND_INFO, subcmd));
         self
     }
 
     #[cfg(not(feature = "help"))]
-    pub(crate) fn in_subcommand<C: CommandInternal>(self, _name: String) -> Self {
+    pub(crate) fn in_subcommand<S: CommandInternal>(self, _subcmd: String) -> Self {
         self
     }
 }

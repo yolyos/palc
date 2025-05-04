@@ -1,9 +1,10 @@
 use proc_macro2::{Span, TokenStream};
-use quote::{ToTokens, format_ident, quote};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::{DeriveInput, Ident, Type};
 
-use crate::common::{ErrorCollector, TopCommandMeta, wrap_anon_item};
+use crate::common::{CommandMeta, ErrorCollector, wrap_anon_item};
 use crate::derive_args::ParserStateDefImpl;
+use syn::spanned::Spanned;
 
 pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
     let mut tts = match expand_impl(input) {
@@ -43,6 +44,7 @@ enum VariantImpl<'i> {
 impl ToTokens for VariantImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.extend(match self {
+            // FIXME: Should check extra args.
             VariantImpl::Unit { variant_name } => quote! {
                 __rt::Ok(Self::#variant_name)
             },
@@ -80,8 +82,12 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
         .filter_map(|variant| {
             let variant_name = &variant.ident;
             let arg_name = heck::AsKebabCase(variant_name.to_string()).to_string();
+            // TODO: Should this also include enum attributes?
             let act = match &variant.fields {
-                syn::Fields::Unit => VariantImpl::Unit { variant_name },
+                syn::Fields::Unit => {
+                    // TODO: Handle `command()` here.
+                    VariantImpl::Unit { variant_name }
+                }
                 syn::Fields::Unnamed(fields) => {
                     if fields.unnamed.len() != 1 {
                         errs.push(syn::Error::new(
@@ -90,16 +96,16 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
                         ));
                         return None;
                     }
+                    // TODO: Handle or reject `command()` here.
                     VariantImpl::Tuple { variant_name, ty: &fields.unnamed[0].ty }
                 }
                 syn::Fields::Named(fields) => {
+                    let cmd_meta = errs.collect(CommandMeta::parse_attrs(&variant.attrs));
                     let state_name =
                         format_ident!("{enum_name}{variant_name}State", span = variant_name.span());
-                    // TODO: Should this also include enum attributes?
-                    let cmd_meta = errs.collect(TopCommandMeta::parse_attrs(&variant.attrs))?;
                     let mut state = errs.collect(crate::derive_args::expand_state_def_impl(
                         &def.vis,
-                        Some(cmd_meta),
+                        cmd_meta,
                         state_name.clone(),
                         enum_name.to_token_stream(),
                         fields,
@@ -119,16 +125,34 @@ fn expand_impl(def: &DeriveInput) -> syn::Result<SubcommandImpl<'_>> {
 impl ToTokens for SubcommandImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self { enum_name, state_defs, variants } = self;
-        let name_strs = variants.iter().map(|(arg_name, _)| arg_name);
-        let cases = variants.iter().map(|(_, e)| e);
-        let command_info_lit = CommandInfoLiteral(self);
+        let name_strs = variants.iter().map(|(name, _)| name);
+        let cases = variants.iter().map(|(_, v)| v);
+
+        let name_arg_infos = variants
+            .iter()
+            .map(|(name, variant)| {
+                let arg_info = match variant {
+                    VariantImpl::Unit { .. } => {
+                        quote! { __rt::RawArgsInfo::empty() }
+                    }
+                    VariantImpl::Tuple { ty, .. } => {
+                        quote_spanned! {ty.span()=> <<#ty as __rt::ArgsInternal>::__State as __rt::ParserState>::RAW_ARGS_INFO }
+                    }
+                    VariantImpl::Struct { state_name } => {
+                        quote_spanned! {state_name.span()=> <#state_name as __rt::ParserState>::RAW_ARGS_INFO }
+                    }
+                };
+                (name.as_str(), arg_info)
+            })
+            .collect::<Vec<_>>();
+        let raw_cmd_info = RawCommandInfo::Subcommand { name_arg_infos: &name_arg_infos };
 
         tokens.extend(quote! {
             #(#state_defs)*
 
             impl __rt::Subcommand for #enum_name {}
             impl __rt::CommandInternal for #enum_name {
-                const COMMAND_INFO: __rt::CommandInfo = #command_info_lit;
+                const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
 
                 fn try_parse_with_name(
                     __name: &__rt::str,
@@ -145,26 +169,37 @@ impl ToTokens for SubcommandImpl<'_> {
     }
 }
 
-struct CommandInfoLiteral<'i>(&'i SubcommandImpl<'i>);
+pub enum RawCommandInfo<'a> {
+    /// A command defined as a `derive(Parser)` struct.
+    Args { state_name: &'a Ident },
+    /// A command defined as a `derive(Subcommand)` enum.
+    Subcommand { name_arg_infos: &'a [(&'a str, TokenStream)] },
+}
 
-impl ToTokens for CommandInfoLiteral<'_> {
+impl ToTokens for RawCommandInfo<'_> {
+    // See format in `RawCommandInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let SubcommandImpl { variants, .. } = self.0;
-        let subcmd_names = variants.iter().map(|(s, _)| s);
-        let subargs = variants.iter().map(|(_, variant)| match variant {
-            VariantImpl::Unit { .. } => quote! { __rt::ArgsInfo::empty() },
-            VariantImpl::Tuple { ty, .. } => {
-                quote! { <<#ty as __rt::ArgsInternal>::__State as __rt::ParserState>::ARGS_INFO }
+        let (raw_names, subinfos) = match self {
+            RawCommandInfo::Args { state_name } => {
+                let subinfos = quote! {
+                    [<#state_name as __rt::ParserState>::RAW_ARGS_INFO]
+                };
+                (String::new(), subinfos)
             }
-            VariantImpl::Struct { state_name } => {
-                quote! { <#state_name as __rt::ParserState>::ARGS_INFO }
+            RawCommandInfo::Subcommand { name_arg_infos } => {
+                let raw_names =
+                    name_arg_infos.iter().flat_map(|(name, _)| [name, "\t"]).collect::<String>();
+                let subinfos = name_arg_infos.iter().map(|(_, tts)| tts);
+                let subinfos = quote! { [#(#subinfos),*] };
+                (raw_names, subinfos)
             }
-        });
+        };
 
         tokens.extend(quote! {
-            __rt::CommandInfo::__new(&[
-                #((#subcmd_names, &#subargs)),*
-            ])
+            &__rt::RawCommandInfo {
+                __raw_names: #raw_names,
+                __subcommands: &#subinfos,
+            }
         });
     }
 }

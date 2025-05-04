@@ -328,9 +328,9 @@ impl Parse for ArgsCommandMeta {
     }
 }
 
-/// The top-level `command(..)` on the struct/enum of `derive(Parser, Args, Subcommand)`.
+/// `command(..)` on the struct of `derive(Parser)` or enum variants of `derive(Subcommand)`.
 #[derive(Default)]
-pub struct TopCommandMeta {
+pub struct CommandMeta {
     pub doc: Doc,
 
     pub name: Option<LitStr>,
@@ -343,7 +343,7 @@ pub struct TopCommandMeta {
     // TODO: verbatim_doc_comment, next_display_order, next_help_heading, rename_all{,_env}
 }
 
-impl TopCommandMeta {
+impl CommandMeta {
     pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
         let mut errs = ErrorCollector::default();
         let mut doc = Doc::default();
@@ -510,7 +510,7 @@ impl ToTokens for FieldPath {
 ///
 /// See `src/refl.rs` for runtime usage that depends on this.
 #[derive(Default, PartialEq)]
-pub struct Doc(String);
+pub struct Doc(pub String);
 
 impl Doc {
     fn post_process(&mut self) {

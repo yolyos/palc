@@ -29,6 +29,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 // ```
 #[doc(hidden)]
 pub mod __private {
+    pub use constcat::concat as const_concat;
     pub use std::borrow::Cow;
     pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
@@ -42,7 +43,7 @@ pub mod __private {
 
     use crate::ErrorKind;
     pub use crate::internal::*;
-    pub use crate::refl::{self, ArgsInfo, CommandInfo};
+    pub use crate::refl::{RawArgsInfo, RawCommandInfo};
     pub use crate::{Args, Parser, Result, Subcommand};
 
     /// The fallback state type for graceful failing from proc-macro.
@@ -51,7 +52,7 @@ pub mod __private {
     impl<T: 'static> ParserState for FallbackState<T> {
         type Output = T;
         type Subcommand = Infallible;
-        const ARGS_INFO: ArgsInfo = ArgsInfo::empty();
+        const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
         const TOTAL_UNNAMED_ARG_CNT: usize = 0;
         fn init() -> Self {
             unimplemented!()
@@ -128,7 +129,7 @@ pub trait Args: Sized + 'static + ArgsInternal {}
 pub trait Subcommand: Sized + 'static + CommandInternal {}
 
 impl CommandInternal for Infallible {
-    const COMMAND_INFO: refl::CommandInfo = refl::CommandInfo::__new(&[]);
+    const RAW_COMMAND_INFO: &'static refl::RawCommandInfo = &refl::RawCommandInfo::empty();
 
     fn try_parse_with_name(
         name: &str,

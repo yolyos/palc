@@ -8,7 +8,7 @@ use os_str_bytes::OsStrBytesExt;
 use ref_cast::RefCast;
 
 use crate::error::ErrorKind;
-use crate::refl::{ArgsInfo, CommandInfo};
+use crate::refl::{RawArgsInfo, RawCommandInfo};
 use crate::values::ArgValueInfo;
 use crate::{Args, Result, Subcommand};
 
@@ -237,7 +237,10 @@ pub trait ArgsInternal: Sized + 'static {
 pub trait ParserState: ParserStateDyn {
     type Output;
     type Subcommand: Subcommand;
-    const ARGS_INFO: ArgsInfo;
+
+    // This is stored by-value, because we only want to promote it to
+    // `&'static [RawArgsInfo]` after processing all `command(flatten)`.
+    const RAW_ARGS_INFO: RawArgsInfo;
     const TOTAL_UNNAMED_ARG_CNT: usize;
 
     fn init() -> Self;
@@ -275,25 +278,16 @@ pub trait ParserStateDyn: 'static {
 }
 
 pub trait CommandInternal: Sized {
-    const COMMAND_INFO: CommandInfo;
+    // This is stored as reference, since we always use it as a reference in
+    // reflection structure. There is no benefit to inline it.
+    const RAW_COMMAND_INFO: &'static RawCommandInfo;
 
     fn try_parse_with_name(
         name: &str,
-        args: &mut ArgsIter<'_>,
-        global: GlobalAncestors<'_>,
-    ) -> Result<Self>;
-}
-
-/// A common program-name-agnostic command.
-impl<A: Args> CommandInternal for A {
-    const COMMAND_INFO: CommandInfo = CommandInfo::new_catchall(&A::__State::ARGS_INFO);
-
-    fn try_parse_with_name(
-        _name: &str,
-        args: &mut ArgsIter<'_>,
-        global: GlobalAncestors<'_>,
+        _args: &mut ArgsIter<'_>,
+        _global: GlobalAncestors<'_>,
     ) -> Result<Self> {
-        try_parse_args(args, global)
+        Err(ErrorKind::UnknownSubcommand(name.into()).into())
     }
 }
 

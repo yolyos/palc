@@ -1,11 +1,283 @@
-#![cfg_attr(not(feature = "help"), expect(unused, reason = "some getters are only used by help"))]
-const MAX_ITER_DEPTH: usize = 4;
+// TODO: Better Debug impl for structs in this mod.
+fn opt(s: &str) -> Option<&str> {
+    if s.is_empty() { None } else { Some(s) }
+}
 
-/// Description of a self-contained applet.
+/// Description of a collection of arguments.
 ///
-/// Only available via `derive(Parser, Subcommand)`, not `derive(Args)`.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AppInfo {
+/// NB. This struct is constructed by proc-macro.
+#[doc(hidden)]
+#[derive(Debug)]
+pub struct RawArgsInfo {
+    /// Subcommand argument, if any.
+    pub __subcommand: Option<&'static RawCommandInfo>,
+
+    /// Zero or more '\0'-terminated raw `ArgInfo`.
+    ///
+    /// Each raw `ArgInfo` consists of '\n'-terminated elements in following order:
+    /// - Short names concatenated without separator.
+    /// - Long names concatenated, each terminated by '\t'.
+    /// - Value names concatenated, each terminated by '\t'.
+    /// - `require_eq as u8`
+    /// - `greedy as u8`
+    /// - Help text.
+    ///
+    /// If either short or long names is non-empty, this is a named argument,
+    /// otherwise it is an unnamed one.
+    pub __raw_args: &'static str,
+
+    /// The first byte is '1' if there is an optional subcommand, otherwise '0'.
+    ///
+    /// If command doc is enabled, there are additionally NUL-separated elements
+    /// in following order:
+    /// - `name`
+    /// - `version`
+    /// - `author`
+    /// - `about`
+    /// - `long_about`
+    /// - `long_help`
+    /// - `after_long_help`
+    pub __raw_meta: &'static str,
+}
+
+impl RawArgsInfo {
+    #[doc(hidden)]
+    pub const fn empty() -> Self {
+        Self { __subcommand: None, __raw_args: "", __raw_meta: "0" }
+    }
+}
+
+/// Description of a collection of arguments.
+#[derive(Debug, Clone, Copy)]
+pub struct ArgsInfo {
+    raw_args: &'static str,
+    subcommand: Option<&'static RawCommandInfo>,
+    is_subcommand_optional: bool,
+    raw_doc: &'static str,
+}
+
+impl ArgsInfo {
+    fn from_raw(raw: &'static RawArgsInfo) -> Self {
+        // See `RawArgsInfo`.
+        let (fst, raw_doc) = raw.__raw_meta.split_at(1);
+        Self {
+            raw_args: raw.__raw_args,
+            subcommand: raw.__subcommand,
+            is_subcommand_optional: fst == "1",
+            raw_doc,
+        }
+    }
+
+    pub fn args(&self) -> impl Iterator<Item = ArgInfo> {
+        // See `RawArgsInfo`.
+        self.raw_args.split_terminator('\0').map(ArgInfo::from_raw)
+    }
+
+    pub fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
+        self.args().filter_map(ArgInfo::to_named)
+    }
+
+    pub fn unnamed_args(&self) -> impl Iterator<Item = UnnamedArgInfo> {
+        self.args().filter_map(ArgInfo::to_unnamed)
+    }
+
+    pub fn subcommand(&self) -> Option<SubcommandInfo> {
+        self.subcommand.map(SubcommandInfo::from_raw)
+    }
+
+    pub fn is_subcommand_optional(&self) -> bool {
+        self.is_subcommand_optional
+    }
+
+    pub fn doc(&self) -> Option<CommandDoc> {
+        // See `RawArgsInfo`.
+        let mut it = self.raw_doc.splitn(7, '\0');
+        let name = it.next()?;
+        let version = opt(it.next()?);
+        let author = opt(it.next()?);
+        let about = opt(it.next()?);
+        let long_about = opt(it.next()?);
+        let after_help = opt(it.next()?);
+        let after_long_help = opt(it.next()?);
+        Some(CommandDoc { name, version, author, about, long_about, after_help, after_long_help })
+    }
+}
+
+/// Description of an arguments.
+#[derive(Debug, Clone, Copy)]
+pub enum ArgInfo {
+    Named(NamedArgInfo),
+    Unnamed(UnnamedArgInfo),
+}
+
+impl ArgInfo {
+    // See `RawArgsInfo`.
+    fn from_raw(raw: &'static str) -> Self {
+        (|| {
+            let mut it = raw.splitn(6, '\n');
+            let raw_short_names = it.next()?;
+            let raw_long_names = it.next()?;
+            let raw_value_names = it.next()?;
+            let require_eq = it.next()? == "1";
+            let greedy = it.next()? == "1";
+            let long_help = it.next()?;
+            Some(if !raw_short_names.is_empty() || !raw_long_names.is_empty() {
+                Self::Named(NamedArgInfo {
+                    raw_short_names,
+                    raw_long_names,
+                    raw_value_names,
+                    require_eq,
+                    greedy,
+                    long_help,
+                })
+            } else {
+                Self::Unnamed(UnnamedArgInfo { raw_value_names, greedy, long_help })
+            })
+        })()
+        .unwrap()
+    }
+
+    pub fn is_named(&self) -> bool {
+        matches!(self, Self::Named(..))
+    }
+
+    pub fn to_named(self) -> Option<NamedArgInfo> {
+        if let Self::Named(v) = self { Some(v) } else { None }
+    }
+
+    pub fn to_unnamed(self) -> Option<UnnamedArgInfo> {
+        if let Self::Unnamed(v) = self { Some(v) } else { None }
+    }
+}
+
+/// Description of a named argument.
+#[derive(Debug, Clone, Copy)]
+pub struct NamedArgInfo {
+    raw_long_names: &'static str,
+    raw_short_names: &'static str,
+    raw_value_names: &'static str,
+    require_eq: bool,
+    greedy: bool,
+    long_help: &'static str,
+}
+
+impl NamedArgInfo {
+    pub fn short_names(&self) -> impl Iterator<Item = char> {
+        self.raw_short_names.chars()
+    }
+
+    pub fn long_names(&self) -> impl Iterator<Item = &'static str> {
+        // See `RawArgInfo`
+        self.raw_long_names.split_terminator('\t').filter(|s| !s.is_empty())
+    }
+
+    pub fn value_names(&self) -> impl Iterator<Item = &'static str> {
+        // See `RawArgInfo`
+        self.raw_value_names.split_terminator('\t').filter(|s| !s.is_empty())
+    }
+
+    pub fn requires_eq(&self) -> bool {
+        self.require_eq
+    }
+
+    pub fn greedy(&self) -> bool {
+        self.greedy
+    }
+
+    pub fn long_help(&self) -> Option<&'static str> {
+        opt(self.long_help)
+    }
+}
+
+/// Description of an unnamed (positional) argument.
+#[derive(Debug, Clone, Copy)]
+pub struct UnnamedArgInfo {
+    raw_value_names: &'static str,
+    greedy: bool,
+    long_help: &'static str,
+}
+
+impl UnnamedArgInfo {
+    pub fn value_names(&self) -> impl Iterator<Item = &'static str> {
+        // See `ArgInfo::from_raw`
+        self.raw_value_names.split_terminator('\t')
+    }
+
+    pub fn greedy(&self) -> bool {
+        self.greedy
+    }
+
+    pub fn long_help(&self) -> Option<&'static str> {
+        opt(self.long_help)
+    }
+}
+
+/// NB. This struct is constructed by proc-macro.
+///
+/// - For regular `derive(Subcommand)` enums, `__raw_names` has the same number
+///   of names as `__subcommands`.
+/// - For `derive(Parser)` structs, `__raw_names` is empty and `__subcommands`
+///   has exactly one element. Note that in this case, this struct cannot be
+///   used as a subcommand of other `derive(Args)` structs.
+#[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
+pub struct RawCommandInfo {
+    /// '\t'-terminated subcommand names.
+    pub __raw_names: &'static str,
+    /// Argument of each subcommand.
+    pub __subcommands: &'static [RawArgsInfo],
+}
+
+impl RawCommandInfo {
+    pub(crate) const fn empty() -> Self {
+        Self { __raw_names: "", __subcommands: &[] }
+    }
+
+    // pub(crate) fn find_subcommand(&self)
+}
+
+/// Description of a command applet.
+#[derive(Debug, Clone, Copy)]
+pub enum CommandInfo {
+    /// A top-level program-name-agnostic `Parser` struct.
+    RootArgs(ArgsInfo),
+    Subcommand(SubcommandInfo),
+}
+
+impl CommandInfo {
+    pub(crate) fn from_raw(raw: &'static RawCommandInfo) -> Self {
+        if raw.__raw_names.is_empty() {
+            Self::RootArgs(ArgsInfo::from_raw(&raw.__subcommands[0]))
+        } else {
+            Self::Subcommand(SubcommandInfo::from_raw(raw))
+        }
+    }
+}
+
+/// Description of a subcommand enum.
+#[derive(Debug, Clone, Copy)]
+pub struct SubcommandInfo(&'static RawCommandInfo);
+
+impl SubcommandInfo {
+    pub(crate) fn from_raw(raw: &'static RawCommandInfo) -> Self {
+        Self(raw)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, ArgsInfo)> {
+        std::iter::zip(
+            self.0.__raw_names.split_terminator('\t'),
+            self.0.__subcommands.iter().map(ArgsInfo::from_raw),
+        )
+    }
+
+    pub fn get(&self, subcmd: &str) -> Option<ArgsInfo> {
+        Some(self.iter().find(|(name, _)| *name == subcmd)?.1)
+    }
+}
+
+/// Help and documentation of a command applet.
+#[derive(Debug, Clone, Copy)]
+pub struct CommandDoc {
     name: &'static str,
     version: Option<&'static str>,
     author: Option<&'static str>,
@@ -15,327 +287,32 @@ pub struct AppInfo {
     after_long_help: Option<&'static str>,
 }
 
-impl AppInfo {
-    // NB. Used by proc-macro.
-    #[doc(hidden)]
-    pub const fn __new(
-        name: &'static str,
-        version: &'static str,
-        author: &'static str,
-        about: &'static str,
-        long_about: &'static str,
-        after_help: &'static str,
-        after_long_help: &'static str,
-    ) -> Self {
-        // Workaround: `bool::then_some` is not a const fn.
-        macro_rules! opt {
-            ($e:expr) => {
-                if $e.is_empty() { None } else { Some($e) }
-            };
-        }
-        Self {
-            name,
-            version: opt!(version),
-            author: opt!(author),
-            about: opt!(about),
-            long_about: opt!(long_about),
-            after_help: opt!(after_help),
-            after_long_help: opt!(after_long_help),
-        }
-    }
-
-    pub fn name(&self) -> &'static str {
+impl CommandDoc {
+    pub fn name(&self) -> &str {
         self.name
     }
 
-    pub fn version(&self) -> Option<&'static str> {
+    pub fn version(&self) -> Option<&str> {
         self.version
     }
 
-    pub fn author(&self) -> Option<&'static str> {
+    pub fn author(&self) -> Option<&str> {
         self.author
     }
 
-    pub fn about(&self) -> Doc {
-        Doc { summary: self.about.unwrap_or(""), full: self.long_about.unwrap_or("") }
+    pub fn about(&self) -> Option<&str> {
+        self.about
     }
 
-    pub fn after_help(&self) -> Option<&'static str> {
+    pub fn long_about(&self) -> Option<&str> {
+        self.long_about
+    }
+
+    pub fn after_help(&self) -> Option<&str> {
         self.after_help
     }
 
-    pub fn after_long_help(&self) -> Option<&'static str> {
-        self.after_long_help.or(self.after_help)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ArgsInfo {
-    direct_named_args: &'static [NamedArgInfo],
-    direct_unnamed_args: &'static [UnnamedArgInfo],
-    last_arg: Option<UnnamedArgInfo>,
-    // (greedy, arg)
-    trailing_var_arg: Option<(bool, UnnamedArgInfo)>,
-    // (optional, subcommand)
-    subcommand: Option<(bool, CommandInfo)>,
-    flatten_args: &'static [&'static ArgsInfo],
-    total_named_arg_cnt: usize,
-    total_unnamed_arg_cnt: usize,
-
-    app: Option<&'static AppInfo>,
-}
-
-impl ArgsInfo {
-    // NB. Used by proc-macro.
-    #[doc(hidden)]
-    pub const fn __new(
-        direct_named_args: &'static [NamedArgInfo],
-        direct_unnamed_args: &'static [UnnamedArgInfo],
-        mut trailing_var_arg: Option<(bool, UnnamedArgInfo)>,
-        mut subcommand: Option<(bool, CommandInfo)>,
-        mut last_arg: Option<UnnamedArgInfo>,
-        flatten_args: &'static [&'static ArgsInfo],
-        app: Option<&'static AppInfo>,
-    ) -> Self {
-        let mut total_named_arg_cnt = direct_named_args.len();
-        let mut total_unnamed_arg_cnt = direct_unnamed_args.len();
-        let mut i = 0;
-        while i < flatten_args.len() {
-            let flatten = flatten_args[i];
-            total_named_arg_cnt += flatten.total_named_arg_cnt;
-            total_unnamed_arg_cnt += flatten.total_unnamed_arg_cnt;
-            if let Some(last) = flatten.last_arg {
-                assert!(
-                    last_arg.replace(last).is_none(),
-                    "duplicated arg(last) from command(flatten) Args",
-                );
-            }
-            if let Some(vaarg) = flatten.trailing_var_arg {
-                assert!(
-                    trailing_var_arg.replace(vaarg).is_none(),
-                    "duplicated variable-length positional arguments from command(flatten) Args",
-                );
-            }
-            if let Some(subcmd) = flatten.subcommand {
-                assert!(
-                    subcommand.replace(subcmd).is_none(),
-                    "duplicated subcommand from command(flatten) Args",
-                );
-            }
-            i += 1;
-        }
-        assert!(
-            trailing_var_arg.is_some() as u8 + subcommand.is_some() as u8 <= 1,
-            "variable-length positional arguments conflicts with subcommands",
-        );
-
-        Self {
-            direct_named_args,
-            direct_unnamed_args,
-            trailing_var_arg,
-            subcommand,
-            last_arg,
-            flatten_args,
-            total_named_arg_cnt,
-            total_unnamed_arg_cnt,
-            app,
-        }
-    }
-
-    // NB. Used by proc-macro.
-    pub const fn empty() -> Self {
-        Self {
-            direct_named_args: &[],
-            direct_unnamed_args: &[],
-            trailing_var_arg: None,
-            subcommand: None,
-            last_arg: None,
-            flatten_args: &[],
-            total_named_arg_cnt: 0,
-            total_unnamed_arg_cnt: 0,
-            app: None,
-        }
-    }
-
-    pub fn named_args(&self) -> impl Iterator<Item = &NamedArgInfo> {
-        let mut stack = [None; MAX_ITER_DEPTH];
-        let mut top = 0usize;
-        stack[0] = Some((self, 0usize));
-        std::iter::from_fn(move || {
-            loop {
-                let (info, i) = stack[top].as_mut()?;
-                if *i < info.direct_named_args.len() {
-                    *i += 1;
-                    return Some(&info.direct_named_args[*i - 1]);
-                }
-                if let Some(deep) = info.flatten_args.get(*i - info.direct_named_args.len()) {
-                    if top == MAX_ITER_DEPTH {
-                        panic!("arg(flatten) too deep");
-                    }
-                    *i += 1;
-                    top += 1;
-                    stack[top] = Some((deep, 0));
-                } else if top == 0 {
-                    return None;
-                } else {
-                    top -= 1;
-                }
-            }
-        })
-    }
-
-    pub fn unnamed_args(&self) -> impl Iterator<Item = &UnnamedArgInfo> {
-        let mut stack = [None; MAX_ITER_DEPTH];
-        let mut top = 0usize;
-        stack[0] = Some((self, 0usize));
-        std::iter::from_fn(move || {
-            loop {
-                let (info, i) = stack[top].as_mut()?;
-                if *i < info.direct_unnamed_args.len() {
-                    *i += 1;
-                    return Some(&info.direct_unnamed_args[*i - 1]);
-                }
-                if let Some(deep) = info.flatten_args.get(*i - info.direct_unnamed_args.len()) {
-                    if top == MAX_ITER_DEPTH {
-                        panic!("arg(flatten) too deep");
-                    }
-                    *i += 1;
-                    top += 1;
-                    stack[top] = Some((deep, 0));
-                } else if top == 0 {
-                    return None;
-                } else {
-                    top -= 1;
-                }
-            }
-        })
-    }
-
-    pub(crate) fn trailing_var_arg(&self) -> Option<(bool, UnnamedArgInfo)> {
-        self.trailing_var_arg
-    }
-
-    pub(crate) fn subcommand(&self) -> Option<(bool, CommandInfo)> {
-        self.subcommand
-    }
-
-    pub fn app(&self) -> Option<&AppInfo> {
-        self.app
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NamedArgInfo {
-    long_names: &'static [&'static str],
-    short_names: &'static [&'static str],
-    value_display: &'static [&'static str],
-    require_eq: bool,
-    doc: &'static str,
-}
-
-impl NamedArgInfo {
-    // NB. Used by proc-macro.
-    #[doc(hidden)]
-    pub const fn __new(
-        doc: &'static str,
-        long_names: &'static [&'static str],
-        short_names: &'static [&'static str],
-        value_display: &'static [&'static str],
-        require_eq: bool,
-    ) -> Self {
-        Self { long_names, short_names, value_display, require_eq, doc }
-    }
-
-    pub fn long_names(&self) -> &[&str] {
-        self.long_names
-    }
-
-    pub fn short_names(&self) -> &[&str] {
-        self.short_names
-    }
-
-    pub fn value_display(&self) -> &[&str] {
-        self.value_display
-    }
-
-    pub fn requires_eq(&self) -> bool {
-        self.require_eq
-    }
-
-    pub fn doc(&self) -> Option<Doc> {
-        Doc::from_raw(self.doc)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct UnnamedArgInfo {
-    value_display: &'static str,
-    doc: &'static str,
-}
-
-impl UnnamedArgInfo {
-    // NB. Used by proc-macro.
-    #[doc(hidden)]
-    pub const fn __new(doc: &'static str, value_display: &'static str) -> Self {
-        Self { value_display, doc }
-    }
-
-    pub fn value_display(&self) -> &str {
-        self.value_display
-    }
-
-    pub fn doc(&self) -> Option<Doc> {
-        Doc::from_raw(self.doc)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CommandInfo {
-    commands: &'static [(&'static str, &'static ArgsInfo)],
-    catchall: Option<&'static ArgsInfo>,
-}
-
-impl CommandInfo {
-    // NB. Used by proc-macro.
-    #[doc(hidden)]
-    pub const fn __new(commands: &'static [(&'static str, &'static ArgsInfo)]) -> Self {
-        Self { commands, catchall: None }
-    }
-
-    pub(crate) const fn new_catchall(catchall: &'static ArgsInfo) -> Self {
-        Self { commands: &[], catchall: Some(catchall) }
-    }
-
-    pub(crate) fn catchall(&self) -> Option<&ArgsInfo> {
-        self.catchall
-    }
-
-    pub(crate) fn commands(&self) -> impl ExactSizeIterator<Item = (&str, &ArgsInfo)> {
-        self.commands.iter().copied()
-    }
-}
-
-// See `Doc` in `clap-static-derive/src/common.rs` for proc-macro pre-processing.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Doc {
-    summary: &'static str,
-    full: &'static str,
-}
-
-impl Doc {
-    fn from_raw(doc: &'static str) -> Option<Self> {
-        if doc.is_empty() {
-            return None;
-        }
-        let (summary, _) = doc.split_once("\n").unwrap_or((doc, ""));
-        Some(Doc { summary, full: doc })
-    }
-
-    pub fn summary(&self) -> &str {
-        self.summary
-    }
-
-    pub fn all_paragraphs(&self) -> impl Iterator<Item = &str> {
-        self.full.lines()
+    pub fn after_long_help(&self) -> Option<&str> {
+        self.after_long_help
     }
 }

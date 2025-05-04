@@ -1,68 +1,77 @@
 use std::fmt::Write;
 
-use crate::refl::CommandInfo;
+use crate::refl::{CommandInfo, RawCommandInfo};
 
-pub(crate) type SubcommandPath = Vec<(String, CommandInfo)>;
+/// List of (arg_info, subcommand) context, in reverse order.
+/// The last element (outermost command) is the top-level command.
+pub(crate) type SubcommandPath = Vec<(&'static RawCommandInfo, String)>;
 
-pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Result {
-    let ((last_cmd, cmd_info), ancestors) = path.split_first().unwrap();
-    let Some(info) = cmd_info
-        .catchall()
-        .or_else(|| cmd_info.commands().find_map(|(c, args)| (c == last_cmd).then_some(args)))
-    else {
-        // Invalid last subcommand, help for all subcommands?
-        todo!();
-    };
-    // Inside a valid subcommand.
+pub(crate) fn generate(rev_path: &SubcommandPath, out: &mut String) -> std::fmt::Result {
+    let path = rev_path
+        .iter()
+        .rev()
+        .filter_map(|(raw, cmd)| match CommandInfo::from_raw(raw) {
+            CommandInfo::RootArgs(args) => Some((cmd.as_str(), args)),
+            CommandInfo::Subcommand(subcmds) => Some((cmd, subcmds.get(cmd)?)),
+        })
+        .collect::<Vec<_>>();
+
+    // There must be at least a top-level `Parser` info, or we would fail fast by `MissingArg0`.
+    assert!(!path.is_empty());
+    let info = path.last().unwrap().1;
 
     // About this (sub)command.
-    let app = info.app().unwrap();
-    let about = app.about();
-    for s in about.all_paragraphs() {
-        writeln!(out, "{s}")?;
+    let cmd_doc = info.doc().expect("doc is enabled");
+    if let Some(about) = cmd_doc.long_about() {
+        writeln!(out, "{about}")?;
     }
     writeln!(out)?;
 
     // Usage of current subcommand path.
 
     write!(out, "Usage:")?;
-    for (subcmd, _) in ancestors.iter().rev() {
-        write!(out, " {subcmd}")?;
+    // Argv0 is included.
+    for (cmd, _) in path.iter() {
+        write!(out, " {cmd}")?;
     }
-    write!(out, " {last_cmd}")?;
 
     let mut has_named @ mut has_unnamed = false;
     // TODO: Hide optional arguments?
     for arg in info.named_args() {
         has_named = true;
-        let name = arg.long_names().first().or(arg.short_names().first()).unwrap();
-        write!(out, " {name}")?;
-        match arg.value_display() {
-            [] => {}
-            [v] => {
-                let sep = if arg.requires_eq() { "=" } else { " " };
-                write!(out, "{sep}<{v}>")?;
-            }
-            _ => todo!(),
+        if let Some(name) = arg.long_names().next() {
+            write!(out, " --{name}")?;
+        } else {
+            write!(out, " -{}", arg.short_names().next().unwrap())?;
+        }
+        // TODO: Multi-value.
+        if let Some(value_name) = arg.value_names().next() {
+            let sep = if arg.requires_eq() { "=" } else { " " };
+            write!(out, "{sep}<{value_name}>")?;
         }
     }
     for arg in info.unnamed_args() {
         has_unnamed = true;
-        write!(out, " <{}>", arg.value_display())?;
+        if arg.greedy() {
+            write!(out, " [{}]...", arg.value_names().next().unwrap())?;
+        } else {
+            for value_name in arg.value_names() {
+                write!(out, " <{value_name}>")?;
+            }
+        }
     }
-    if let Some((_, vaarg)) = info.trailing_var_arg() {
-        write!(out, " [{}]...", vaarg.value_display())?;
-    }
-    if let Some((optional, _)) = info.subcommand() {
-        out.write_str(if optional { " [COMMAND]" } else { " <COMMAND>" })?;
+    let subcmd = info.subcommand();
+    if subcmd.is_some() {
+        out.write_str(if info.is_subcommand_optional() { " [COMMAND]" } else { " <COMMAND>" })?;
     }
     writeln!(out)?;
 
     // List of commands.
 
-    if let Some((_, cmd_info)) = info.subcommand() {
+    if let Some(subcmd) = &subcmd {
         writeln!(out, "\nCommands:")?;
-        for (cmd, _) in cmd_info.commands() {
+        for (cmd, _) in subcmd.iter() {
+            // TODO: Description.
             writeln!(out, "    {cmd}")?;
         }
     }
@@ -75,10 +84,12 @@ pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Res
             if i > 0 {
                 writeln!(out)?;
             }
-            writeln!(out, "  <{}>", arg.value_display())?;
-            if let Some(doc) = arg.doc() {
-                for (i, s) in doc.all_paragraphs().enumerate() {
-                    if i > 0 {
+            for value_name in arg.value_names() {
+                writeln!(out, "  <{value_name}>")?;
+            }
+            if let Some(help) = arg.long_help() {
+                for (j, s) in help.split_terminator('\n').enumerate() {
+                    if j > 0 {
                         writeln!(out)?;
                     }
                     writeln!(out, "          {s}")?;
@@ -93,24 +104,21 @@ pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Res
         writeln!(out, "\nOptions:")?;
 
         for arg in info.named_args() {
-            match (arg.short_names().first(), arg.long_names().first()) {
+            match (arg.short_names().next(), arg.long_names().next()) {
                 (None, None) => unreachable!(),
-                (None, Some(long)) => write!(out, "      {long}"),
-                (Some(short), None) => write!(out, "  {short}"),
-                (Some(short), Some(long)) => write!(out, "  {short}, {long}"),
+                (None, Some(long)) => write!(out, "      --{long}"),
+                (Some(short), None) => write!(out, "  -{short}"),
+                (Some(short), Some(long)) => write!(out, "  -{short}, --{long}"),
             }?;
-            match arg.value_display() {
-                [] => {}
-                [v] => {
-                    let sep = if arg.requires_eq() { "=" } else { " " };
-                    write!(out, "{sep}<{v}>")?;
-                }
-                _ => todo!(),
+            // TODO: Multi-value.
+            if let Some(value_name) = arg.value_names().next() {
+                let sep = if arg.requires_eq() { "=" } else { " " };
+                write!(out, "{sep}<{value_name}>")?;
             }
             writeln!(out)?;
-            if let Some(doc) = arg.doc() {
-                for (i, s) in doc.all_paragraphs().enumerate() {
-                    if i != 0 {
+            if let Some(help) = arg.long_help() {
+                for (j, s) in help.split_terminator('\n').enumerate() {
+                    if j != 0 {
                         writeln!(out)?;
                     }
                     writeln!(out, "          {s}")?;
@@ -120,7 +128,7 @@ pub(crate) fn generate(path: &SubcommandPath, out: &mut String) -> std::fmt::Res
         }
     }
 
-    if let Some(after) = app.after_help() {
+    if let Some(after) = cmd_doc.after_long_help() {
         out.write_str(after)?;
     }
 
