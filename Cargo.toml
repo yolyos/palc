@@ -4,15 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["help"]
+default = ["derive", "help"]
 help = []
+derive = ["dep:clap-static-derive"]
 
 __test-allow-unknown-fields = ["clap-static-derive/__test-allow-unknown-fields"]
 
 [dependencies]
-clap-static-derive.path = "./clap-static-derive"
 os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_os_str"] }
 ref-cast = "1.0.24"
+
+[dependencies.clap-static-derive]
+path = "./clap-static-derive"
+optional = true
 
 [[example]]
 name = "deno-static"
@@ -21,6 +25,7 @@ required-features = ["__test-allow-unknown-fields"]
 [dev-dependencies]
 argh = { version = "0.1.13", default-features = false }
 clap = { version = "4.5.35", default-features = false, features = ["std", "derive", "error-context", "help", "usage"] }
+clap-static-derive.path = "./clap-static-derive"
 
 [lints.clippy]
 dbg-macro = "warn"

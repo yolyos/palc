@@ -1,4 +1,5 @@
-use clap_static::Parser;
+use clap_static::Parser as _;
+use clap_static_derive::Parser;
 
 #[allow(dead_code)]
 #[path = "./util/simple.rs"]

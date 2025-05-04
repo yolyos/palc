@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use clap_static::{Args, Parser, Subcommand, ValueEnum};
+use clap_static::Parser as _;
+use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, PartialEq, Parser)]
 struct MyCli {

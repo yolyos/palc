@@ -5,7 +5,6 @@ use std::path::PathBuf;
 
 use crate::internal::{ArgsInternal, CommandInternal};
 
-pub use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 use error::ErrorKind;
 use internal::{ArgsIter, GlobalAncestors};
 
@@ -16,6 +15,9 @@ mod values;
 
 #[cfg(feature = "help")]
 mod help;
+
+#[cfg(feature = "derive")]
+pub use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 
 pub use crate::error::Error;
 pub type Result<T, E = Error> = std::result::Result<T, E>;
