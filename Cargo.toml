@@ -33,6 +33,7 @@ dbg-macro = "warn"
 # TODO: todo = "warn"
 
 [workspace]
+members = ["compile-bench"]
 
 [profile.minimal]
 inherits = "release"
