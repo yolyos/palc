@@ -14,7 +14,13 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
 
     let name = &input.ident;
     tts.extend(wrap_anon_item(quote! {
+        #[automatically_derived]
         impl __rt::Subcommand for #name {}
+
+        #[automatically_derived]
+        impl __rt::Sealed for #name {}
+
+        #[automatically_derived]
         impl __rt::CommandInternal for #name {
             const COMMAND_INFO: __rt::CommandInfo = __rt::CommandInfo::__new(&[]);
             fn try_parse_with_name(
@@ -136,7 +142,7 @@ impl ToTokens for SubcommandImpl<'_> {
                         quote! { __rt::RawArgsInfo::empty() }
                     }
                     VariantImpl::Tuple { ty, .. } => {
-                        quote_spanned! {ty.span()=> <<#ty as __rt::ArgsInternal>::__State as __rt::ParserState>::RAW_ARGS_INFO }
+                        quote_spanned! {ty.span()=> <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO }
                     }
                     VariantImpl::Struct { state_name } => {
                         quote_spanned! {state_name.span()=> <#state_name as __rt::ParserState>::RAW_ARGS_INFO }
@@ -150,7 +156,13 @@ impl ToTokens for SubcommandImpl<'_> {
         tokens.extend(quote! {
             #(#state_defs)*
 
+            #[automatically_derived]
+            impl __rt::Sealed for #enum_name {}
+
+            #[automatically_derived]
             impl __rt::Subcommand for #enum_name {}
+
+            #[automatically_derived]
             impl __rt::CommandInternal for #enum_name {
                 const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
 

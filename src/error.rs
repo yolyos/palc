@@ -1,7 +1,7 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use crate::internal::CommandInternal;
+use crate::runtime::CommandInternal;
 
 #[derive(Debug)]
 pub struct Error(Box<Inner>);

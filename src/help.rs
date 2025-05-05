@@ -1,6 +1,6 @@
 use crate::{
-    internal::CommandInternal,
     refl::{CommandInfo, RawCommandInfo},
+    runtime::CommandInternal,
 };
 
 /// List of (arg_info, subcommand) context, in reverse order.

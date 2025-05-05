@@ -24,15 +24,15 @@ pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
         impl __rt::Parser for #name {}
 
         #[automatically_derived]
-        impl __rt::Args for #name {}
-
-        #[automatically_derived]
-        impl __rt::ArgsInternal for #name {
+        impl __rt::Args for #name {
             type __State = __rt::FallbackState<#name>;
         }
 
         #[automatically_derived]
         impl __rt::CommandInternal for #name {}
+
+        #[automatically_derived]
+        impl __rt::Sealed for #name {}
     }));
     tts
 }
@@ -103,12 +103,12 @@ impl ToTokens for ArgsImpl<'_> {
 
         tokens.extend(quote! {
             #[automatically_derived]
-            impl __rt::Args for #struct_name {}
-
-            #[automatically_derived]
-            impl __rt::ArgsInternal for #struct_name {
+            impl __rt::Args for #struct_name {
                 type __State = #state_name;
             }
+
+            #[automatically_derived]
+            impl __rt::Sealed for #struct_name {}
 
             #state
         });
@@ -553,7 +553,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         //
         // T / Option<T>            => Option<T>
         // Vec<T> / Option<Vec<T>>  => Option<Vec<T>>
-        // FlattenTy                => <FlattenTy as ArgsInternal>::__State
+        // FlattenTy                => <FlattenTy as Args>::__State
         // SubcommandTy             => Option<SubcommandTy>
         let mut field_names = Vec::new();
         let mut field_tys = Vec::new();
@@ -594,7 +594,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
         }
         for &FlattenFieldInfo { ident, effective_ty } in &self.flatten_fields {
             field_names.push(ident);
-            field_tys.push(quote! { <#effective_ty as __rt::ArgsInternal>::__State });
+            field_tys.push(quote! { <#effective_ty as __rt::Args>::__State });
             field_inits.push(quote! { __rt::ParserState::init() });
             field_finishes.push(quote! { __rt::ParserState::finish(self.#ident)? });
         }
@@ -632,7 +632,8 @@ impl ToTokens for ParserStateDefImpl<'_> {
 
                 const RAW_ARGS_INFO: __rt::RawArgsInfo = #raw_args_info;
                 const TOTAL_UNNAMED_ARG_CNT: __rt::usize =
-                    #self_unnamed_arg_cnt #(+ <<#flatten_tys as __rt::ArgsInternal>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
+                    #self_unnamed_arg_cnt
+                    #(+ <<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
                 #[allow(clippy::unnecessary_lazy_evaluations)]
                 fn init() -> Self {
@@ -790,7 +791,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             .map(|FlattenFieldInfo { effective_ty, .. }| quote_spanned! {effective_ty.span()=>
                 const {
                     __rt::assert!(
-                        <<#effective_ty as __rt::ArgsInternal>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT== 0,
+                        <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
                         "TODO: cannot arg(flatten) positional arguments yet",
                     );
                 }
@@ -967,7 +968,7 @@ impl ToTokens for RawArgsInfo<'_> {
             quote! {
                 __rt::__const_concat!(
                     #buf,
-                    #(<<#tys as __rt::ArgsInternal>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args,)*
+                    #(<<#tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args,)*
                 )
             }
         };

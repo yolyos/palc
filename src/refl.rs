@@ -1,3 +1,4 @@
+#![expect(dead_code, reason = "TODO: Decide whether to public these APIs")]
 // TODO: Better Debug impl for structs in this mod.
 
 /// Description of a collection of arguments.
@@ -125,10 +126,6 @@ impl ArgInfo {
             })
         })()
         .unwrap()
-    }
-
-    pub fn is_named(&self) -> bool {
-        matches!(self, Self::Named(..))
     }
 
     pub fn to_named(self) -> Option<NamedArgInfo> {

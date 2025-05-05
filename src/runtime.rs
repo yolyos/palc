@@ -13,6 +13,11 @@ use crate::values::ArgValueInfo;
 use crate::{Args, Result, Subcommand};
 
 use super::Error;
+use std::convert::Infallible;
+
+// The fake sealed trait to show in docs.
+// Proc-macro can still generate its impl.
+pub trait Sealed {}
 
 #[macro_export]
 #[doc(hidden)]
@@ -68,6 +73,50 @@ pub const fn const_concat_impl<const LEN: usize>(strs: &[&str]) -> [u8; LEN] {
         i += 1;
     }
     buf
+}
+
+/// The fallback state type for graceful failing from proc-macro.
+pub struct FallbackState<T>(Infallible, PhantomData<T>);
+
+impl<T: 'static> ParserState for FallbackState<T> {
+    type Output = T;
+    type Subcommand = Infallible;
+
+    const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
+    const TOTAL_UNNAMED_ARG_CNT: usize = 0;
+
+    fn init() -> Self {
+        unimplemented!()
+    }
+    fn finish(self) -> Result<Self::Output> {
+        match self {}
+    }
+    fn subcommand_getter() -> impl Fn(&mut Self) -> &mut Option<Self::Subcommand> {
+        |_| unreachable!()
+    }
+}
+impl<T: 'static> ParserStateDyn for FallbackState<T> {}
+
+pub fn unknown_subcommand<T>(arg: &str) -> Result<T> {
+    Err(ErrorKind::UnknownSubcommand(arg.into()).into())
+}
+
+pub fn missing_required_arg<T>(arg: &'static str) -> Result<T> {
+    Err(ErrorKind::MissingRequiredArgument.with_arg(arg))
+}
+
+pub fn missing_required_subcmd<T>() -> Result<T> {
+    Err(ErrorKind::MissingRequiredSubcommand.into())
+}
+
+// TODO: Detail errors.
+pub fn fail_constraint<T>(arg: &'static str) -> Result<T> {
+    Err(ErrorKind::Constraint.with_arg(arg))
+}
+
+#[inline]
+pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
+    Cow::Owned(std::mem::take(s))
 }
 
 /// A named argument with its place attached as `&mut self`.
@@ -285,10 +334,6 @@ pub type FeedNamed<'s> = ControlFlow<&'s mut dyn ArgPlace>;
 
 /// This should be an enum, but be this for `?` support, which is unstable to impl.
 pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Error>>;
-
-pub trait ArgsInternal: Sized + 'static {
-    type __State: ParserState<Output = Self>;
-}
 
 pub trait ParserState: ParserStateDyn {
     type Output;
