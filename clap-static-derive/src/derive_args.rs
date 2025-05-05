@@ -961,13 +961,22 @@ impl ToTokens for RawArgsInfo<'_> {
             quote! { #buf }
         } else {
             let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
-            // FIXME: Reject if flatten args have subcommand.
-            quote! {
+            let mut tts = TokenStream::new();
+            for ty in tys.clone(){
+                tts.extend(quote_spanned! {ty.span()=> 
+                    __rt::assert!(
+                        <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__subcommand.is_none(),
+                        "cannot flatten an Args with subcommand",
+                    );
+                });
+            }
+            quote! {{
+                #tts
                 __rt::__const_concat!(
                     #buf,
                     #(<<#tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args,)*
                 )
-            }
+            }}
         };
 
         let (is_subcmd_optional, subcmd) = if let Some(s) = &self.0.subcommand {
