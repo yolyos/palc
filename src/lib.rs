@@ -29,16 +29,16 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 // ```
 #[doc(hidden)]
 pub mod __private {
-    pub use constcat::concat as const_concat;
     pub use std::borrow::Cow;
     pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
+    pub use std::str::from_utf8;
     pub use std::{assert, concat, env, unimplemented, unreachable};
     pub use {Default, Err, Fn, Iterator, None, Ok, Option, Some, Vec, bool, char, str, usize};
 
     // Used by `arg_value_info!`
-    pub use crate::arg_value_info;
     pub use crate::values::{ArgValueInfo, InferValueParser, ValueEnum};
+    pub use crate::{__const_concat, arg_value_info};
     pub use std::marker::PhantomData;
 
     use crate::ErrorKind;

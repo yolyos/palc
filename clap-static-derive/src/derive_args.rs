@@ -965,9 +965,9 @@ impl ToTokens for RawArgsInfo<'_> {
             let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
             // FIXME: Reject if flatten args have subcommand.
             quote! {
-                __rt::const_concat!(
+                __rt::__const_concat!(
                     #buf,
-                    #(<<#tys as __rt::ArgsInternal>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args),*
+                    #(<<#tys as __rt::ArgsInternal>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args,)*
                 )
             }
         };
@@ -983,22 +983,22 @@ impl ToTokens for RawArgsInfo<'_> {
         let raw_meta = if let Some(m) = &self.0.cmd_meta {
             let name = match &m.name {
                 Some(s) => quote! { #s },
-                None => quote! { __rt::env!("CARGO_PKG_NAME") },
+                None => quote! { env!("CARGO_PKG_NAME") },
             };
             let version = match &m.version {
                 Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_VERSION") },
+                Some(Override::Inherit) => quote! { env!("CARGO_PKG_VERSION") },
                 None => quote! { "" },
             };
             let author = match &m.author {
                 Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_AUTHORS") },
+                Some(Override::Inherit) => quote! { env!("CARGO_PKG_AUTHORS") },
                 None => quote! { "" },
             };
             // TODO: Compress this if it is the first line of `long_about`.
             let about = match &m.about {
                 Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_DESCRIPTION") },
+                Some(Override::Inherit) => quote! { env!("CARGO_PKG_DESCRIPTION") },
                 None => m.doc.summary().to_token_stream(),
             };
             let long_about = match &m.long_about {
@@ -1014,7 +1014,7 @@ impl ToTokens for RawArgsInfo<'_> {
                 None => quote! { "" },
             };
             quote! {
-                __rt::const_concat!(
+                __rt::__const_concat!(
                     #subcmd_optional,
                     #name, "\0",
                     #version, "\0",
@@ -1022,7 +1022,7 @@ impl ToTokens for RawArgsInfo<'_> {
                     #about, "\0",
                     #long_about, "\0",
                     #after_help, "\0",
-                    #after_long_help
+                    #after_long_help,
                 )
             }
         } else {
