@@ -1,7 +1,12 @@
 [package]
 name = "palc-derive"
-version = "0.1.0"
-edition = "2024"
+version = "0.0.1"
+description = "Derive macros for palc. Use the re-exports from palc intead."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+categories.workspace = true
+keywords.workspace = true
 
 [lib]
 proc-macro = true

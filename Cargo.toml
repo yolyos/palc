@@ -1,7 +1,23 @@
+[workspace]
+members = [".", "derive", "compile-bench"]
+
+[workspace.package]
+repository = "https://github.com/oxalica/palc"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+categories = ["command-line-interface"]
+keywords = ["argument", "cli", "arg", "argument", "clap"]
+
 [package]
 name = "palc"
-version = "0.1.0"
-edition = "2024"
+version = "0.0.1"
+description = "WIP: Command Line Argument Parser with several opposite design goal from Clap"
+exclude = ["*.sh"] # Shortcut scripts.
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+categories.workspace = true
+keywords.workspace = true
 
 [features]
 default = ["derive", "help"]
@@ -16,6 +32,7 @@ ref-cast = "1.0.24"
 
 [dependencies.palc-derive]
 path = "./derive"
+version = "0.0.1"
 optional = true
 
 [[example]]
@@ -31,9 +48,6 @@ palc-derive.path = "./derive"
 dbg-macro = "warn"
 # TODO: todo = "warn"
 
-[workspace]
-members = [".", "derive", "compile-bench"]
-
 [profile.minimal]
 inherits = "release"
 strip = true
@@ -41,3 +55,6 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+[package.metadata.docs.rs]
+all-features = true

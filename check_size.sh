@@ -46,7 +46,7 @@ if [[ "$1" = "-m" ]]; then
     exit 0
 fi
 
-for example in simple-{clap,argh,static} criterion-{clap,argh,static} deno-{clap,static}; do
+for example in simple-{clap,argh,static,none} criterion-{clap,argh,static} deno-{clap,static}; do
     if [[ "$example" != *"$filter"* ]]; then
         continue
     fi

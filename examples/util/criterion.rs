@@ -2,6 +2,9 @@
 //!
 //! Manually translated from:
 //! <https://github.com/bheisler/criterion.rs/blob/260e2f1c788227096cf483c0c2a1933968bbe27b/src/lib.rs#L754>
+//!
+//! Criterion.rs is dual licensed under the Apache 2.0 license and the MIT license.
+//! See more at <https://github.com/bheisler/criterion.rs>
 use std::num::NonZero;
 
 use super::{Parser, ValueEnum};

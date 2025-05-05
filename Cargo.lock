@@ -96,7 +96,7 @@ checksum = "c86e2db86dd008b4c88c77a9bb83d9286bf77204e255bb3fda3b2eebcae66b62"
 
 [[package]]
 name = "palc"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "argh",
  "clap",
@@ -107,7 +107,7 @@ dependencies = [
 
 [[package]]
 name = "palc-derive"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "heck",
  "prettyplease",
