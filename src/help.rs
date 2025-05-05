@@ -1,8 +1,12 @@
-use crate::refl::{CommandInfo, RawCommandInfo};
+use crate::{
+    internal::CommandInternal,
+    refl::{CommandInfo, RawCommandInfo},
+};
 
 /// List of (arg_info, subcommand) context, in reverse order.
 /// The last element (outermost command) is the top-level command.
-pub(crate) type SubcommandPath = Vec<(&'static RawCommandInfo, String)>;
+pub(crate) type SubcommandPath = Vec<SubcommandPathFrag>;
+pub(crate) type SubcommandPathFrag = (&'static RawCommandInfo, String);
 
 #[inline(never)]
 fn push_str(out: &mut String, s: &str) {
@@ -10,7 +14,7 @@ fn push_str(out: &mut String, s: &str) {
 }
 
 #[cold]
-pub(crate) fn render_help_into(out: &mut String, rev_path: &SubcommandPath) {
+pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]) {
     macro_rules! w {
         ($($e:expr),*) => {{
             $(push_str(out, $e);)*
@@ -119,7 +123,7 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &SubcommandPath) {
                 (None, Some(long)) => w!("      --", long),
                 (Some(short), None) => w!("  -", short.encode_utf8(&mut [0u8; 4])),
                 (Some(short), Some(long)) => {
-                    w!("  -", short.encode_utf8(&mut [0u8; 4]), "--", long)
+                    w!("  -", short.encode_utf8(&mut [0u8; 4]), ", ", "--", long)
                 }
             };
             // TODO: Multi-value.
@@ -143,4 +147,10 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &SubcommandPath) {
     if let Some(after) = cmd_doc.after_long_help() {
         w!(after);
     }
+}
+
+pub(crate) fn render_help_for<C: CommandInternal>(argv0: impl Into<String>) -> String {
+    let mut out = String::new();
+    render_help_into(&mut out, &[(C::RAW_COMMAND_INFO, argv0.into())]);
+    out
 }

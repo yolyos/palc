@@ -109,6 +109,11 @@ pub trait Parser: Sized + 'static + CommandInternal {
         let mut iter = iter.into_iter().map(|s| s.into());
         try_parse_from_command(&mut iter)
     }
+
+    #[cfg(feature = "help")]
+    fn render_long_help(argv0: impl Into<String>) -> String {
+        help::render_help_for::<Self>(argv0)
+    }
 }
 
 fn try_parse_from_command<C: CommandInternal>(

@@ -2,82 +2,9 @@
 //
 // This file is trimed from:
 // <https://github.com/denoland/deno/pull/8617/files>
-#![expect(dead_code)]
+#![allow(dead_code)]
 use super::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
-
-#[derive(Clone, Debug, PartialEq, Default)]
-enum DenoSubcommand {
-    Bundle {
-        source_file: String,
-        out_file: Option<PathBuf>,
-    },
-    Compile {
-        source_file: String,
-        output: Option<PathBuf>,
-    },
-    Completions {
-        buf: Box<[u8]>,
-    },
-    Doc {
-        private: bool,
-        json: bool,
-        source_file: Option<String>,
-        filter: Option<String>,
-    },
-    Eval {
-        print: bool,
-        code: String,
-        as_typescript: bool,
-    },
-    Cache {
-        files: Vec<String>,
-    },
-    Fmt {
-        check: bool,
-        files: Vec<PathBuf>,
-        ignore: Vec<PathBuf>,
-    },
-    Info {
-        json: bool,
-        file: Option<String>,
-    },
-    Install {
-        module_url: String,
-        args: Vec<String>,
-        name: Option<String>,
-        root: Option<PathBuf>,
-        force: bool,
-    },
-    Lint {
-        files: Vec<PathBuf>,
-        ignore: Vec<PathBuf>,
-        rules: bool,
-        json: bool,
-    },
-    #[default]
-    Repl,
-    Run {
-        script: String,
-    },
-    Test {
-        no_run: bool,
-        fail_fast: bool,
-        quiet: bool,
-        allow_none: bool,
-        include: Option<Vec<String>>,
-        filter: Option<String>,
-    },
-    Types,
-    Upgrade {
-        dry_run: bool,
-        force: bool,
-        canary: bool,
-        version: Option<String>,
-        output: Option<PathBuf>,
-        ca_file: Option<String>,
-    },
-}
 
 static ENV_VARIABLES_HELP: &str = "ENVIRONMENT VARIABLES:
     DENO_DIR             Set the cache directory

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use clap_static::Parser as _;
 use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
 
+/// My great App.
 #[derive(Debug, PartialEq, Parser)]
 struct MyCli {
     name: Option<String>,
@@ -73,4 +74,14 @@ fn smoke() {
             }),
         }
     );
+}
+
+#[cfg(feature = "help")]
+#[test]
+fn help() {
+    let help = MyCli::render_long_help("me");
+    println!("{help}");
+
+    assert!(help.contains("My great App."));
+    assert!(help.contains("Usage: me -v --color=<COLOR>"));
 }

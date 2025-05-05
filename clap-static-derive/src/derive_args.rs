@@ -57,18 +57,13 @@ fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<
     }
 
     let mut errs = ErrorCollector::default();
-    let parser_cmd_meta = if is_parser {
-        errs.collect(CommandMeta::parse_attrs(&def.attrs))
-    } else {
-        // TODO: Reject `command()` here.
-        None
-    };
+    let cmd_meta = errs.collect(CommandMeta::parse_attrs(&def.attrs)).unwrap_or_default();
 
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
     let state = errs.collect(expand_state_def_impl(
         &def.vis,
-        parser_cmd_meta,
+        Some(cmd_meta),
         state_name,
         struct_name,
         fields,
@@ -1001,15 +996,14 @@ impl ToTokens for RawArgsInfo<'_> {
                 None => quote! { "" },
             };
             // TODO: Compress this if it is the first line of `long_about`.
-            let about = match &m.long_about {
+            let about = match &m.about {
                 Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => m.doc.summary().to_token_stream(),
-                None => quote! { "" },
+                Some(Override::Inherit) => quote! { __rt::env!("CARGO_PKG_DESCRIPTION") },
+                None => m.doc.summary().to_token_stream(),
             };
             let long_about = match &m.long_about {
                 Some(Override::Explicit(s)) => quote! { #s },
-                Some(Override::Inherit) => m.doc.to_token_stream(),
-                None => quote! { "" },
+                Some(Override::Inherit) | None => m.doc.to_token_stream(),
             };
             let after_help = match &m.after_help {
                 Some(e) => quote! { #e },
