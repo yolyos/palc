@@ -1,6 +1,6 @@
 // Copyright 2018-2020 the Deno authors. All rights reserved. MIT license.
 //
-// This file is trimed from:
+// This file is trimmed from:
 // <https://github.com/denoland/deno/pull/8617/files>
 #![allow(dead_code)]
 use super::{Args, Parser, Subcommand, ValueEnum};
@@ -140,7 +140,7 @@ struct CompileSubcommand {
     output: Option<PathBuf>,
 
     #[command(flatten)]
-    compilaton: CompilationArgs,
+    compilation: CompilationArgs,
 }
 
 #[derive(ValueEnum, Debug, Clone)]

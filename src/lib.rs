@@ -87,7 +87,7 @@ fn try_parse_from_command<C: CommandInternal>(
         .map_err(|err| err.in_subcommand::<C>(program_name.into_owned()))
 }
 
-/// A group of arguments for composing larger inferface.
+/// A group of arguments for composing larger interface.
 ///
 /// Users should only get an implementation via [`derive(Args)`](macro@Args).
 pub trait Args: Sized + Sealed + 'static {

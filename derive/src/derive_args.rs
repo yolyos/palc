@@ -396,7 +396,7 @@ pub fn expand_state_def_impl<'i>(
         if value_display.value().contains(|ch: char| ch.is_ascii_control()) {
             errs.push(syn::Error::new(
                 value_display.span(),
-                "arg(value_name) must NOT contain ASCII control charactors",
+                "arg(value_name) must NOT contain ASCII control characters",
             ));
         }
 
@@ -961,9 +961,9 @@ impl ToTokens for RawArgsInfo<'_> {
             quote! { #buf }
         } else {
             let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
-            let mut tts = TokenStream::new();
+            let mut asserts = TokenStream::new();
             for ty in tys.clone(){
-                tts.extend(quote_spanned! {ty.span()=> 
+                asserts.extend(quote_spanned! {ty.span()=> 
                     __rt::assert!(
                         <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__subcommand.is_none(),
                         "cannot flatten an Args with subcommand",
@@ -971,7 +971,7 @@ impl ToTokens for RawArgsInfo<'_> {
                 });
             }
             quote! {{
-                #tts
+                #asserts
                 __rt::__const_concat!(
                     #buf,
                     #(<<#tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args,)*

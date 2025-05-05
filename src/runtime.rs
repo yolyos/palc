@@ -397,9 +397,7 @@ impl ParserState for () {
     const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
     const TOTAL_UNNAMED_ARG_CNT: usize = 0;
 
-    fn init() -> Self {
-        ()
-    }
+    fn init() -> Self {}
 
     fn finish(self) -> Result<Self::Output> {
         Ok(())
@@ -566,7 +564,7 @@ impl<'a> ArgsIter<'a> {
                 Some((name, value)) => (name, Some(value)),
                 None => (rest, None),
             };
-            // Include preceeding "--" only for single-char long arguments.
+            // Include proceeding "--" only for single-char long arguments.
             let enc_name = if name.len() != 1 { name } else { buf.index(..3) };
             let enc_name =
                 enc_name.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(enc_name.to_os_string()))?;
