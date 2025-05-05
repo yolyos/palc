@@ -60,7 +60,7 @@ for example in simple-{clap,argh,static} criterion-{clap,argh,static} deno-{clap
         --example "$example" \
         "${flags[@]}" \
         --crates 2>/dev/null \
-        | rg --color=never "$example"'|clap_static|std|clap|argh|\.text'
+        | rg --color=never "$example"'|palc|std|clap|argh|\.text'
     echo
 
     cargo bloat \

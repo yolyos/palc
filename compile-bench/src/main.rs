@@ -1,7 +1,7 @@
 //! This is an example for a dead simple program.
 use std::path::PathBuf;
 
-use clap_static::Parser;
+use palc::Parser;
 
 #[expect(dead_code, reason = "for bench")]
 #[derive(Parser)]

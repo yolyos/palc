@@ -48,28 +48,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clap-static"
-version = "0.1.0"
-dependencies = [
- "argh",
- "clap",
- "clap-static-derive",
- "os_str_bytes",
- "ref-cast",
-]
-
-[[package]]
-name = "clap-static-derive"
-version = "0.1.0"
-dependencies = [
- "heck",
- "prettyplease",
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "clap_builder"
 version = "4.5.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -101,7 +79,7 @@ checksum = "f46ad14479a25103f283c0f10005961cf086d8dc42205bb44c46ac563475dca6"
 name = "compile-bench"
 version = "0.1.0"
 dependencies = [
- "clap-static",
+ "palc",
 ]
 
 [[package]]
@@ -115,6 +93,28 @@ name = "os_str_bytes"
 version = "7.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c86e2db86dd008b4c88c77a9bb83d9286bf77204e255bb3fda3b2eebcae66b62"
+
+[[package]]
+name = "palc"
+version = "0.1.0"
+dependencies = [
+ "argh",
+ "clap",
+ "os_str_bytes",
+ "palc-derive",
+ "ref-cast",
+]
+
+[[package]]
+name = "palc-derive"
+version = "0.1.0"
+dependencies = [
+ "heck",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "prettyplease"

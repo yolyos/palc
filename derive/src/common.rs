@@ -85,7 +85,7 @@ pub fn strip_ty_ctor<'i>(mut ty: &'i Type, ty_ctor: &str) -> Option<&'i Type> {
 pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
     quote! {
         const _: () = {
-            use ::clap_static::__private as __rt;
+            use ::palc::__private as __rt;
             #tts
         };
     }

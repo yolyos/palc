@@ -14,7 +14,7 @@ mod values;
 mod help;
 
 #[cfg(feature = "derive")]
-pub use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
+pub use palc_derive::{Args, Parser, Subcommand, ValueEnum};
 
 pub use crate::error::Error;
 use crate::runtime::Sealed;

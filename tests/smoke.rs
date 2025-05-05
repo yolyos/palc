@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use clap_static::Parser as _;
-use clap_static_derive::{Args, Parser, Subcommand, ValueEnum};
+use palc::Parser as _;
+use palc_derive::{Args, Parser, Subcommand, ValueEnum};
 
 /// My great App.
 #[derive(Debug, PartialEq, Parser)]

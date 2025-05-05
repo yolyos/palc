@@ -1,5 +1,5 @@
-use clap_static::Parser as _;
-use clap_static_derive::{Parser, ValueEnum};
+use palc::Parser as _;
+use palc_derive::{Parser, ValueEnum};
 
 #[allow(dead_code)]
 #[path = "./util/criterion.rs"]

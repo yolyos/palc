@@ -5,4 +5,4 @@ edition = "2024"
 publish = false # Only for local testing.
 
 [dependencies]
-clap-static.path = ".."
+palc.path = ".."

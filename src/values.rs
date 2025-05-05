@@ -12,9 +12,9 @@ mod sealed {
 }
 
 #[diagnostic::on_unimplemented(
-    message = "`{Self}` cannot be parsed into a clap_static argument value",
+    message = "`{Self}` cannot be parsed into a palc argument value",
     label = "Unparseable type",
-    note = "for enum types, try `derive(clap_static::ValueEnum)` on it",
+    note = "for enum types, try `derive(palc::ValueEnum)` on it",
     note = "or you can implement either `From<OsString>`, `From<String>` or `FromStr` for it \
     to make it parseable"
 )]
