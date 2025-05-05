@@ -62,10 +62,8 @@ pub struct Opt {
     subcommand: Option<SubcommandEnum>,
 }
 
-// FIXME: Without `pub` rustc rejects it with "private type in public interface".
-#[allow(private_interfaces)]
 #[derive(Subcommand, Debug, Clone)]
-pub enum SubcommandEnum {
+enum SubcommandEnum {
     Bundle(BundleSubcommand),
     Cache(CacheSubcommand),
     Compile(CompileSubcommand),

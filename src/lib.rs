@@ -1,10 +1,9 @@
 #![forbid(unsafe_code)]
-use std::convert::Infallible;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 use error::ErrorKind;
-use runtime::{ArgsIter, CommandInternal, GlobalAncestors, ParserState};
+use runtime::{ArgsIter, CommandInternal, ParserState};
 
 mod error;
 mod refl;
@@ -101,17 +100,3 @@ pub trait Args: Sized + Sealed + 'static {
 ///
 /// Users should only get an implementation via [`derive(Subcommand)`](macro@Subcommand).
 pub trait Subcommand: Sized + CommandInternal + Sealed + 'static {}
-
-impl Subcommand for Infallible {}
-impl Sealed for Infallible {}
-impl CommandInternal for Infallible {
-    const RAW_COMMAND_INFO: &'static refl::RawCommandInfo = &refl::RawCommandInfo::empty();
-
-    fn try_parse_with_name(
-        name: &str,
-        _args: &mut ArgsIter<'_>,
-        _global: GlobalAncestors<'_>,
-    ) -> Result<Self> {
-        Err(ErrorKind::UnknownSubcommand(name.into()).into())
-    }
-}

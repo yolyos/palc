@@ -600,13 +600,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
             field_finishes.push(quote! { __rt::ParserState::finish(self.#ident)? });
         }
 
-        let mut subcommand_ty = quote! { __rt::Infallible };
-        let mut subcommand_getter = quote! { __rt::unreachable!() };
-        if let Some(SubcommandInfo { ident, effective_ty, .. }) = self.subcommand {
-            subcommand_ty = effective_ty.to_token_stream();
-            subcommand_getter = quote! { &mut __this.#ident };
-        }
-
         let feed_named_func = FeedNamedImpl(self);
         let feed_global_named_func = FeedGlobalNamedImpl(self);
         let feed_unnamed_func = FeedUnnamedImpl(self);
@@ -619,9 +612,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let raw_args_info = RawArgsInfo(self);
 
         tokens.extend(quote! {
-            // FIXME: Visibility is still broken with `command(flatten)`.
-            // Inherited visibility is needed to avoid "private type in public interface".
-            // It is always invisible from user site because we are in an anonymous scope.
             #vis struct #state_name {
                 #(#field_names : #field_tys,)*
             }
@@ -629,7 +619,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
             #[automatically_derived]
             impl __rt::ParserState for #state_name {
                 type Output = #output_ty;
-                type Subcommand = #subcommand_ty;
 
                 const RAW_ARGS_INFO: __rt::RawArgsInfo = #raw_args_info;
                 const TOTAL_UNNAMED_ARG_CNT: __rt::usize =
@@ -648,10 +637,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     __rt::Ok(#output_ctor {
                         #(#field_names : #field_finishes,)*
                     })
-                }
-
-                fn subcommand_getter() -> impl __rt::Fn(&mut Self) -> &mut __rt::Option<Self::Subcommand> {
-                    |__this| #subcommand_getter
                 }
 
                 #feed_global_named_func
@@ -817,9 +802,20 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 let parsed = value_parsed(effective_ty);
                 quote! {{ self.#ident.get_or_insert_default().push(#parsed); __rt::Ok(__rt::None) }}
             }
-        } else if def.subcommand.is_some() {
+        } else if let Some(SubcommandInfo { ident, effective_ty, .. }) = def.subcommand {
+            let state_name = &def.state_name;
             let has_global = def.named_fields.iter().any(|&i| def.fields[i].global);
-            quote! { __rt::place_for_subcommand::<_, #has_global>(self) }
+            quote! {{
+                struct __Getter;
+                impl __rt::GetSubcommand for __Getter {
+                    type State = #state_name;
+                    type Subcommand = #effective_ty;
+                    fn get(__this: &mut Self::State)  -> &mut Option<Self::Subcommand> {
+                        &mut __this.#ident
+                    }
+                }
+                __rt::place_for_subcommand::<__Getter, #has_global>(self)
+            }}
         } else {
             quote! { __rt::Err(__rt::None) }
         };

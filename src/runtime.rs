@@ -80,7 +80,6 @@ pub struct FallbackState<T>(Infallible, PhantomData<T>);
 
 impl<T: 'static> ParserState for FallbackState<T> {
     type Output = T;
-    type Subcommand = Infallible;
 
     const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
     const TOTAL_UNNAMED_ARG_CNT: usize = 0;
@@ -90,9 +89,6 @@ impl<T: 'static> ParserState for FallbackState<T> {
     }
     fn finish(self) -> Result<Self::Output> {
         match self {}
-    }
-    fn subcommand_getter() -> impl Fn(&mut Self) -> &mut Option<Self::Subcommand> {
-        |_| unreachable!()
     }
 }
 impl<T: 'static> ParserStateDyn for FallbackState<T> {}
@@ -300,14 +296,14 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
     Ok(Some(Place::<T, A>::ref_cast_mut(place)))
 }
 
-pub fn place_for_subcommand<S: ParserState, const CUR_HAS_GLOBAL: bool>(
-    state: &mut S,
+pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
+    state: &mut G::State,
 ) -> FeedUnnamed<'_> {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<S, const CUR_HAS_GLOBAL: bool>(S);
+    struct Place<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(G::State);
 
-    impl<S: ParserState, const CUR_HAS_GLOBAL: bool> GreedyArgsPlace for Place<S, CUR_HAS_GLOBAL> {
+    impl<G: GetSubcommand, const CUR_HAS_GLOBAL: bool> GreedyArgsPlace for Place<G, CUR_HAS_GLOBAL> {
         fn feed_greedy(
             &mut self,
             name: OsString,
@@ -318,14 +314,14 @@ pub fn place_for_subcommand<S: ParserState, const CUR_HAS_GLOBAL: bool>(
             let mut global = (&mut self.0, global);
             let global =
                 if CUR_HAS_GLOBAL { &mut global as &mut dyn GlobalChain } else { global.1 };
-            let subcmd = S::Subcommand::try_parse_with_name(name, args, global)
-                .map_err(|err| err.in_subcommand::<S::Subcommand>(name.to_owned()))?;
-            *S::subcommand_getter()(&mut self.0) = Some(subcmd);
+            let subcmd = G::Subcommand::try_parse_with_name(name, args, global)
+                .map_err(|err| err.in_subcommand::<G::Subcommand>(name.to_owned()))?;
+            *G::get(&mut self.0) = Some(subcmd);
             Ok(())
         }
     }
 
-    Ok(Some(Place::<S, CUR_HAS_GLOBAL>::ref_cast_mut(state)))
+    Ok(Some(Place::<G, CUR_HAS_GLOBAL>::ref_cast_mut(state)))
 }
 
 /// Break on a resolved place. Continue on unknown names.
@@ -337,7 +333,6 @@ pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Er
 
 pub trait ParserState: ParserStateDyn {
     type Output;
-    type Subcommand: Subcommand;
 
     // This is stored by-value, because we only want to promote it to
     // `&'static [RawArgsInfo]` after processing all `command(flatten)`.
@@ -346,12 +341,27 @@ pub trait ParserState: ParserStateDyn {
 
     fn init() -> Self;
     fn finish(self) -> Result<Self::Output>;
-    fn subcommand_getter() -> impl Fn(&mut Self) -> &mut Option<Self::Subcommand>;
 
     // The is only called via `GlobalChain::search_global_named` thus do not need to be in vtable.
     fn feed_global_named(&mut self, _name: &str) -> FeedNamed<'_> {
         ControlFlow::Continue(())
     }
+}
+
+/// The helper trait for `place_for_subcommand`.
+///
+/// It is possible to merge these methods into `ParserState`, but that would
+/// expose `Subcommand` type at `UserParser::__State::Subcommand`, causing
+/// various privacy issues if `UserParser` and its subcommand have different
+/// privacy.
+///
+/// Here we define a separated (public) trait, but let proc-macro generate a
+/// private witness type inside `feed_unnamed`, hiding the subcommand type from
+/// public interface.
+pub trait GetSubcommand: 'static {
+    type State: ParserState;
+    type Subcommand: Subcommand;
+    fn get(state: &mut Self::State) -> &mut Option<Self::Subcommand>;
 }
 
 pub trait ParserStateDyn: 'static {
