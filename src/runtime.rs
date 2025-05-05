@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::convert::Infallible;
 use std::ffi::{OsStr, OsString};
 use std::marker::PhantomData;
 use std::num::NonZero;
@@ -13,7 +14,6 @@ use crate::values::ArgValueInfo;
 use crate::{Args, Result, Subcommand};
 
 use super::Error;
-use std::convert::Infallible;
 
 // The fake sealed trait to show in docs.
 // Proc-macro can still generate its impl.
@@ -404,7 +404,8 @@ pub fn try_parse_with_state(
     global: GlobalAncestors<'_>,
 ) -> Result<()> {
     let mut idx = 0usize;
-    while let Some(arg) = args.cache_next_arg()? {
+    let mut buf = OsString::new();
+    while let Some(arg) = args.next_arg(&mut buf)? {
         match arg {
             Arg::DashDash => {
                 drop(arg);
@@ -418,8 +419,9 @@ pub fn try_parse_with_state(
                         Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
                     }
                 }
+                return Ok(());
             }
-            Arg::EncodedNamed(enc_name) => {
+            Arg::EncodedNamed(enc_name, value) => {
                 let place = match state.feed_named(enc_name) {
                     ControlFlow::Break(place) => place,
                     ControlFlow::Continue(()) => match global.search_global_named(enc_name) {
@@ -436,14 +438,21 @@ pub fn try_parse_with_state(
                 };
                 match place.num_values() {
                     NumValues::Zero => {
-                        args.check_no_value()?;
+                        if let Some(v) = value {
+                            return Err(ErrorKind::UnexpectedValue(v.into()).with_arg(enc_name));
+                        }
                         place.feed_none()?;
                     }
-                    NumValues::One { require_equals: false } => {
-                        place.feed(args.take_value()?)?;
-                    }
-                    NumValues::One { require_equals: true } => {
-                        place.feed(Cow::Borrowed(args.take_value_after_eq()?))?;
+                    NumValues::One { require_equals } => {
+                        if let Some(v) = value {
+                            place.feed(Cow::Borrowed(v))?;
+                            args.discard_short_args();
+                        } else if !require_equals {
+                            let v = args.next_value(enc_name)?;
+                            place.feed(Cow::Owned(v))?;
+                        } else {
+                            return Err(ErrorKind::MissingEq.with_arg(enc_name));
+                        }
                     }
                 }
             }
@@ -460,141 +469,93 @@ pub fn try_parse_with_state(
 
 pub struct ArgsIter<'a> {
     iter: &'a mut dyn Iterator<Item = OsString>,
-    cur_input_arg: OsString,
-    state: ArgsState,
-}
-
-#[derive(Debug)]
-enum ArgsState {
-    Unnamed,
-    Long { eq_pos: Option<NonZero<usize>> },
-    Short { next_pos: usize },
+    /// If we are inside a short arguments bundle, the index of next short arg.
+    next_short_idx: Option<NonZero<usize>>,
 }
 
 #[derive(Debug)]
 enum Arg<'a> {
+    /// "--"
     DashDash,
-    EncodedNamed(&'a str),
+    /// Encoded arg name and its inlined value (excluding `=`).
+    ///
+    /// - "--long" => ("long", None)
+    /// - "--long=value" => ("long", Some("value"))
+    /// - "-s" => ("s", None)
+    /// - "-smore", "-s=more" => ("s", Some("more"))
+    EncodedNamed(&'a str, Option<&'a OsStr>),
     Unnamed(OsString),
 }
 
 impl<'a> ArgsIter<'a> {
     pub(crate) fn new(iter: &'a mut dyn Iterator<Item = OsString>) -> Self {
-        Self { iter, cur_input_arg: OsString::new(), state: ArgsState::Unnamed }
+        Self { iter, next_short_idx: None }
     }
 
-    fn check_no_value(&mut self) -> Result<()> {
-        // This only fail for long arguments with joined value: `--long=[..]`.
-        if let ArgsState::Long { eq_pos: Some(pos) } = self.state {
-            Err(ErrorKind::UnexpectedValue(
-                self.cur_input_arg.index(pos.get() + 1..).to_os_string(),
-            )
-            .with_arg(self.cur_input_arg.index(..pos.get())))
-        } else {
-            Ok(())
-        }
-    }
+    /// Iterate the next logical argument, possibly splitting short argument bundle.
+    fn next_arg<'b>(&mut self, buf: &'b mut OsString) -> Result<Option<Arg<'b>>> {
+        if let Some(pos) = self.next_short_idx.filter(|pos| pos.get() < buf.len()) {
+            let argb = buf.as_encoded_bytes();
+            let idx = pos.get();
 
-    /// Retrieve the value for the current named argument after a mandatory "=".
-    fn take_value_after_eq(&mut self) -> Result<&'_ OsStr> {
-        match self.state {
-            ArgsState::Long { eq_pos: Some(pos) } => Ok(self.cur_input_arg.index(pos.get() + 1..)),
-            ArgsState::Short { next_pos }
-                if self.cur_input_arg.as_encoded_bytes().get(next_pos) == Some(&b'=') =>
-            {
-                // Don't traverse the rest.
-                self.state = ArgsState::Unnamed;
-                Ok(self.cur_input_arg.index(next_pos + 1..))
-            }
-            // FIXME: Report error argument name.
-            _ => Err(ErrorKind::MissingEq.into()),
-        }
-    }
+            // Assume all valid short args are ASCII.
+            let next_byte = std::str::from_utf8(&argb[idx..idx + 1]);
+            let short_arg = next_byte.map_err(|_| {
+                // By struct invariant, prefix must be UTF-8.
+                let rest = buf.index(idx..);
+                ErrorKind::UnknownNamedArgument.with_arg(rest)
+            })?;
 
-    /// Retrieve the value for the current named argument, either after "=" or fetch from the next
-    /// input argument.
-    fn take_value(&mut self) -> Result<Cow<'_, OsStr>> {
-        match self.state {
-            ArgsState::Long { eq_pos: Some(pos) } => {
-                Ok(Cow::Borrowed(self.cur_input_arg.index(pos.get() + 1..)))
-            }
-            ArgsState::Short { next_pos } if next_pos < self.cur_input_arg.len() => {
-                let pos = if self.cur_input_arg.as_encoded_bytes()[next_pos] == b'=' {
-                    next_pos + 1
-                } else {
-                    next_pos
-                };
-                // Don't traverse the rest.
-                self.state = ArgsState::Unnamed;
-                Ok(Cow::Borrowed(self.cur_input_arg.index(pos..)))
-            }
-            _ => {
-                let Some(arg) = self.iter.next() else {
-                    let name = std::mem::take(&mut self.cur_input_arg);
-                    return Err(ErrorKind::MissingValue.with_arg(name));
-                };
-                Ok(Cow::Owned(arg))
-            }
+            let value = match argb.get(idx + 1) {
+                Some(&b'=') => Some(buf.index(idx + 1..)),
+                Some(_) => Some(buf.index(idx..)),
+                None => None,
+            };
+            self.next_short_idx = pos.checked_add(1);
+            return Ok(Some(Arg::EncodedNamed(short_arg, value)));
         }
-    }
-
-    /// Cache the next logical argument (short or long).
-    fn cache_next_arg(&mut self) -> Result<Option<Arg<'_>>> {
-        // Iterate the next short argument if we are inside a group of it.
-        match self.state {
-            ArgsState::Short { next_pos } if next_pos != self.cur_input_arg.len() => {
-                let rest = &self.cur_input_arg.as_encoded_bytes()[next_pos..];
-                // FIXME: More efficient way to get the next UTF-8 char?
-                // UTF-8 char has encoded length 1..=4
-                for len in 1..4 {
-                    match std::str::from_utf8(&rest[..len]) {
-                        Ok(s) => {
-                            // Invariant: `prev_end..prev_end+len` is checked to be valid UTF-8.
-                            self.state = ArgsState::Short { next_pos: next_pos + len };
-                            return Ok(Some(Arg::EncodedNamed(s)));
-                        }
-                        // Incomplete encoding.
-                        Err(e) if e.error_len().is_none() => {}
-                        Err(_) => break,
-                    }
-                }
-                return Err(ErrorKind::InvalidUtf8(
-                    self.cur_input_arg.index(next_pos..).to_os_string(),
-                )
-                .into());
-            }
-            _ => {}
-        }
+        self.next_short_idx = None;
 
         // Otherwise, fetch the next input argument.
-        let Some(s) = self.iter.next() else {
-            return Ok(None);
+        *buf = match self.iter.next() {
+            Some(raw) => raw,
+            None => return Ok(None),
         };
-        self.cur_input_arg = s;
-        let argb = self.cur_input_arg.as_encoded_bytes();
-        self.state = ArgsState::Unnamed;
 
-        Ok(Some(if argb == b"-" {
-            Arg::Unnamed(std::mem::take(&mut self.cur_input_arg))
-        } else if argb == b"--" {
-            Arg::DashDash
-        } else if argb.starts_with(b"--") {
-            let end = if let Some(pos) = argb.iter().position(|&b| b == b'=') {
-                self.state = ArgsState::Long { eq_pos: NonZero::new(pos) };
-                pos
-            } else {
-                self.state = ArgsState::Long { eq_pos: None };
-                argb.len()
+        if buf.starts_with("--") {
+            if buf.len() == 2 {
+                return Ok(Some(Arg::DashDash));
+            }
+            // Using `strip_prefix` in if-condition requires polonius to make lifetime check.
+            let rest = buf.index(2..);
+            let (name, value) = match rest.split_once('=') {
+                Some((name, value)) => (name, Some(value)),
+                None => (rest, None),
             };
             // Include preceeding "--" only for single-char long arguments.
-            let start = if end == 3 { 0 } else { 2 };
-            let s = self.cur_input_arg.index(start..end);
-            Arg::EncodedNamed(s.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(s.to_os_string()))?)
-        } else if argb.starts_with(b"-") {
-            self.state = ArgsState::Short { next_pos: 1 };
-            return self.cache_next_arg();
+            let enc_name = if name.len() != 1 { name } else { buf.index(..3) };
+            let enc_name =
+                enc_name.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(enc_name.to_os_string()))?;
+            Ok(Some(Arg::EncodedNamed(enc_name, value)))
+        } else if buf.starts_with("-") && buf.len() != 1 {
+            self.next_short_idx = Some(NonZero::new(1).unwrap());
+            return self.next_arg(buf);
         } else {
-            Arg::Unnamed(std::mem::take(&mut self.cur_input_arg))
-        }))
+            Ok(Some(Arg::Unnamed(std::mem::take(buf))))
+        }
+    }
+
+    /// Discard the rest of short argument bundle, poll a new raw argument on next `next_arg`.
+    fn discard_short_args(&mut self) {
+        self.next_short_idx = None;
+    }
+
+    fn next_value(&mut self, enc_name: &str) -> Result<OsString> {
+        assert!(self.next_short_idx.is_none());
+        self.iter
+            .next()
+            // TODO: allow_hyphen.
+            .filter(|raw| raw == "-" || !raw.starts_with('='))
+            .ok_or_else(|| ErrorKind::MissingValue.with_arg(enc_name))
     }
 }

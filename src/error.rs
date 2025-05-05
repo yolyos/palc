@@ -147,6 +147,7 @@ impl Error {
 }
 
 impl From<ErrorKind> for Error {
+    #[cold]
     fn from(repr: ErrorKind) -> Self {
         Self(Box::new(Inner {
             arg: None,
@@ -158,6 +159,7 @@ impl From<ErrorKind> for Error {
 }
 
 impl ErrorKind {
+    #[cold]
     pub(crate) fn with_arg(self, arg: impl Into<OsString>) -> Error {
         Error::from(self).with_arg(arg)
     }
