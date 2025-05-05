@@ -1,0 +1,154 @@
+# palc
+
+WIP: This project is still working in progress.
+
+Prototype of a Command Line Argument Parser with several opposite design goals from [clap].
+
+[clap]: https://github.com/clap-rs/clap
+
+## Similar: Compatible[^1] Derive API
+
+palc is an un-opinionated[^2] derive-based argument parser.
+We choose to align with the clap 4.0 derive API: `Parser`, `Args` and `Subcommand`
+macros with almost compatible `command(..)` and `arg(..)` attributes.
+
+In most cases, switching between clap derive and palc derive is as easy as
+changing a line in `Cargo.toml` and relevant `use` statements. No vendor locking.
+Writing your CLI structs first before deciding which crate to use.
+
+## Similar: Full-featured, out of the box
+
+palc also aim to provide a decent CLI experience under default features:
+help generations, non-UTF-8 support, argument constraints, `Args` composition,
+subcommands, you name it.
+
+Though some of clap features are not-yet-implemented.
+
+<details>
+
+<summary>Yet Implemented features</summary>
+
+- Argument behaviors:
+  - [x] Boolean flags `--verbose`.
+  - [x] Named arguments `--long value`, `-svalue`
+    - [x] Bundled short arguments `-czf`
+    - [x] '='-separator `--long=v` `-f=v`.
+    - [x] Aliases.
+    - [x] Reject hyphen values.
+    - [ ] Allow hyphen values.
+    - [ ] Space-delimited multi-values.
+    - [x] Custom-delimited multi-values.
+    - [ ] Multi-values with value-terminator.
+  - [x] Unnamed/free/positional arguments `FILE`.
+    - [x] Force no named arguments `--`.
+    - [x] Greedy/tail arguments (`arg(trailing_var_arg)`).
+    - [x] Last arguments after `--` (`arg(last)`).
+  - [ ] Custom ArgAction.
+  - [ ] Custom number of values (`arg(num_values)`).
+  - [ ] Overrides.
+
+  - [x] Default values, default pre-parsed values.
+    - [ ] Default missing values.
+    - [ ] Default from env.
+
+- Argument parsing:
+  - [x] `derive(ValueEnum)`
+  - [x] Non-UTF-8 inputs `PathBuf`, `OsString`.
+  - [x] Automatically picked custom parser via `From<OsString>`, `From<String>` or `FromStr`.
+
+- Argument validations:
+  - [x] Required.
+    - [ ] Conditional required.
+  - [x] Conflicts.
+  - [x] Exclusive.
+  - [ ] Args groups (one and only one argument).
+
+- Composition:
+  - [x] `arg(flatten)`.
+    - Note that non-flatten arguments always take precedence over flatten arguments.
+    - [x] Flatten named arguments.
+    - [ ] Flatten unnamed arguments.
+  - [x] Subcommands.
+    - [ ] Argv0 as subcommand (multi-call binary).
+    - [x] Global args.
+      - Note: Current implementation has limitations on the number of values it takes.
+        And it only propagates up if the inner Args cannot accept the named arguments --
+        that is -- only one innermost Args on the ancestor chain will receive it, not all.
+
+- [x] Help generation.
+  - [x] Long help `--help`.
+  - [ ] Short help `-h`.
+  - [ ] Version `--version`.
+  - [x] Custom header and footer.
+  - [ ] Hiding.
+  - [ ] Possible values of enums.
+  - [ ] Custom help subcommand or flags.
+
+- [ ] Helpful error messages.
+  - [x] Error argument and reason.
+  - [ ] Expected format.
+  - [ ] Error suggestions ("did you mean").
+  - [ ] Custom help template.
+
+- [ ] Reflection.
+- [ ] Colored output.
+- [ ] Completions.
+
+</details>
+
+## Different: Fully static via `derive` macros
+
+The only way to define a CLI parser in palc is via `derive`-macros. It is not
+possible to manually write `impl` or even construct it dynamically.
+Argument parsers are prepared, validated and generated during compile time.
+The runtime does nothing other than parsing, thus has no startup overhead.
+Also no insta-panics at runtime!
+
+On the contrary, clap only works on builder API under the hood and its derive
+API translates attributes to its builder API.  The parser is still composed,
+verified, and then executed at runtime. This suffers from
+[startup time penalty](https://github.com/clap-rs/clap/pull/4792).
+
+This implies we do more work in proc-macro while rustc does less work on
+generated code. In compilation time benchmarks, we outperform clap-derive in
+both full build and incremental build.
+
+## Different: No bloat
+
+Despite how many features we have, we keep binary overhead in check.
+Our goal is to give a size overhead that *deserves* its features, without
+unreasonable or meaningless bloat.
+Spoiler: the cost of all these features may be lower than you think.
+
+Unlike other min-size-centric projects, eg. [pico-args] or [gumdrop], we choose
+NOT to sacrifice CLI user experience, or force CLI designers to write more
+(repetitive) code.
+We are striving for a good balance between features and their cost.
+
+[pico-args]: https://crates.io/crates/pico-args
+[gumdrop]: https://crates.io/crates/gumdrop
+
+<br>
+
+#### License
+
+<sup>
+Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
+2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
+</sup>
+
+<br>
+
+<sub>
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
+be dual licensed as above, without any additional terms or conditions.
+</sub>
+
+[^1]: Due to design differences, some attributes cannot be implemented
+statically or require a different syntax.
+TODO: Document all attributes and notable differences with clap.
+
+[^2]: [argh] say they are "opinionated" as an excuse of subjective and "creative" choice on derive attribute names and letter case restrictions. We are against these.
+
+[argh]: https://github.com/google/argh
