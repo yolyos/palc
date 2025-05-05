@@ -36,7 +36,7 @@ version = "0.0.1"
 optional = true
 
 [[example]]
-name = "deno-static"
+name = "deno-palc"
 required-features = ["__test-allow-unknown-fields"]
 
 [dev-dependencies]
