@@ -39,7 +39,7 @@ pub struct RawArgsInfo {
 }
 
 impl RawArgsInfo {
-    #[doc(hidden)]
+    // NB. Used by proc-macro.
     pub const fn empty() -> Self {
         Self { __subcommand: None, __raw_args: "", __raw_meta: "0" }
     }
@@ -217,7 +217,8 @@ pub struct RawCommandInfo {
 }
 
 impl RawCommandInfo {
-    pub(crate) const fn empty() -> Self {
+    // NB. Used by proc-macro.
+    pub const fn empty() -> Self {
         Self { __raw_names: "", __subcommands: &[] }
     }
 

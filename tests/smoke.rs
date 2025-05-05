@@ -37,6 +37,8 @@ enum Commands {
 
         files: Option<Vec<PathBuf>>,
     },
+    Transparent(Config),
+    Unit,
 }
 
 #[derive(Debug, PartialEq, ValueEnum)]

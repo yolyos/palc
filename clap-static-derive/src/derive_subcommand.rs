@@ -22,7 +22,7 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
 
         #[automatically_derived]
         impl __rt::CommandInternal for #name {
-            const COMMAND_INFO: __rt::CommandInfo = __rt::CommandInfo::__new(&[]);
+            const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = &__rt::RawCommandInfo::empty();
             fn try_parse_with_name(
                 __name: &__rt::str,
                 __args: &mut __rt::ArgsIter<'_>,
@@ -50,12 +50,13 @@ enum VariantImpl<'i> {
 impl ToTokens for VariantImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.extend(match self {
-            // FIXME: Should check extra args.
-            VariantImpl::Unit { variant_name } => quote! {
+            // Consume all rest args, possibly feed global arguments.
+            VariantImpl::Unit { variant_name } => quote! {{
+                __rt::try_parse_with_state(&mut (), __args, __global)?;
                 __rt::Ok(Self::#variant_name)
-            },
+            }},
             VariantImpl::Tuple { variant_name, ty } => quote! {
-                __rt::try_parse_args::<#ty>(__args, __global).map(Self::#variant_name)
+                __rt::Ok(Self::#variant_name(__rt::try_parse_args::<#ty>(__args, __global)?))
             },
             VariantImpl::Struct { state_name } => quote! {{
                 let mut __state = <#state_name as __rt::ParserState>::init();

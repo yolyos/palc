@@ -388,6 +388,29 @@ pub trait ParserStateDyn: 'static {
     }
 }
 
+/// No-op state for unit structs or unit variants.
+///
+/// We still need to fully consume the input for global arguments and error reporting.
+impl ParserState for () {
+    type Output = ();
+
+    const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
+    const TOTAL_UNNAMED_ARG_CNT: usize = 0;
+
+    fn init() -> Self {
+        ()
+    }
+
+    fn finish(self) -> Result<Self::Output> {
+        Ok(())
+    }
+}
+impl ParserStateDyn for () {}
+impl Args for () {
+    type __State = ();
+}
+impl Sealed for () {}
+
 pub trait CommandInternal: Sized {
     // This is stored as reference, since we always use it as a reference in
     // reflection structure. There is no benefit to inline it.
@@ -408,6 +431,7 @@ pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>, global: GlobalAncestors<
     state.finish()
 }
 
+#[inline(never)]
 pub fn try_parse_with_state(
     state: &mut dyn ParserStateDyn,
     args: &mut ArgsIter<'_>,
