@@ -118,7 +118,7 @@ impl ArgTyKind<'_> {
 }
 
 pub enum ArgOrCommand {
-    Arg(ArgMeta),
+    Arg(Box<ArgMeta>),
     Command(ArgsCommandMeta),
 }
 
@@ -137,7 +137,7 @@ impl ArgOrCommand {
     fn parse_attrs(attrs: &[Attribute]) -> syn::Result<ArgOrCommand> {
         let mut errs = ErrorCollector::default();
         let mut doc = Doc::default();
-        let mut arg = None::<ArgMeta>;
+        let mut arg = None::<Box<ArgMeta>>;
         let mut command = None;
         for attr in attrs {
             let path = attr.path();
@@ -191,8 +191,8 @@ pub struct ArgMeta {
     // TODO: raw
 
     // Value behaviors.
-    pub default_value: Option<syn::Expr>,
-    pub default_value_t: Option<Override<syn::Expr>>,
+    pub default_value: Option<syn::LitStr>,
+    pub default_value_t: Option<Override<VerbatimExpr>>,
     pub value_delimiter: Option<syn::LitChar>,
     // TODO: num_args,
     // index, action, value_terminator, default_missing_value*, env
@@ -334,20 +334,20 @@ pub struct CommandMeta {
     pub doc: Doc,
 
     pub name: Option<LitStr>,
-    pub version: Option<Override<syn::Expr>>,
-    pub author: Option<Override<syn::Expr>>,
-    pub about: Option<Override<syn::Expr>>,
-    pub long_about: Option<Override<syn::Expr>>,
-    pub after_help: Option<syn::Expr>,
-    pub after_long_help: Option<syn::Expr>,
+    pub version: Option<Override<VerbatimExpr>>,
+    pub author: Option<Override<VerbatimExpr>>,
+    pub about: Option<Override<VerbatimExpr>>,
+    pub long_about: Option<Override<VerbatimExpr>>,
+    pub after_help: Option<VerbatimExpr>,
+    pub after_long_help: Option<VerbatimExpr>,
     // TODO: verbatim_doc_comment, next_display_order, next_help_heading, rename_all{,_env}
 }
 
 impl CommandMeta {
-    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Self> {
+    pub fn parse_attrs(attrs: &[Attribute]) -> syn::Result<Box<Self>> {
         let mut errs = ErrorCollector::default();
         let mut doc = Doc::default();
-        let mut this = Self::default();
+        let mut this = <Box<Self>>::default();
         for attr in attrs {
             doc.extend_from_attr(attr)?;
             if attr.path().is_ident("command") {
@@ -500,6 +500,26 @@ impl ToTokens for FieldPath {
             tokens.extend(quote! { . });
             ident.to_tokens(tokens);
         }
+    }
+}
+
+pub struct VerbatimExpr(TokenStream);
+
+impl Parse for VerbatimExpr {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Self(input.parse::<syn::Expr>()?.to_token_stream()))
+    }
+}
+
+impl From<VerbatimExpr> for TokenStream {
+    fn from(e: VerbatimExpr) -> Self {
+        e.0
+    }
+}
+
+impl ToTokens for VerbatimExpr {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        self.0.to_tokens(tokens);
     }
 }
 

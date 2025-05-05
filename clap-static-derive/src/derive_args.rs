@@ -134,7 +134,7 @@ pub struct ParserStateDefImpl<'i> {
     catchall_field: Option<CatchallFieldInfo>,
     last_field: Option<usize>,
 
-    cmd_meta: Option<CommandMeta>,
+    cmd_meta: Option<Box<CommandMeta>>,
 }
 
 struct FieldInfo<'i> {
@@ -227,7 +227,7 @@ impl ToTokens for FieldFinish {
 
 pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
-    cmd_meta: Option<CommandMeta>,
+    cmd_meta: Option<Box<CommandMeta>>,
     state_name: Ident,
     output_ty: TokenStream,
     input_fields: &'i syn::FieldsNamed,
@@ -349,7 +349,7 @@ pub fn expand_state_def_impl<'i>(
         };
 
         // Default values.
-        if let Some(expr) = arg.default_value.take() {
+        if let Some(preparse_default) = arg.default_value.take() {
             if arg.default_value_t.is_some() {
                 errs.push(syn::Error::new(
                     field.ty.span(),
@@ -359,14 +359,14 @@ pub fn expand_state_def_impl<'i>(
 
             let value_info = value_info(effective_ty);
             finish = FieldFinish::UnwrapOrExpr(quote_spanned! {field.ty.span()=>
-                __rt::ArgValueInfo::parse_str(#value_info, #expr).expect("cannot parse default value")
+                __rt::ArgValueInfo::parse_str(#value_info, #preparse_default).expect("cannot parse default value")
             });
         } else if let Some(default) = arg.default_value_t.take() {
             // TODO: Support bool?
             if matches!(ty_kind, ArgTyKind::Vec(_) | ArgTyKind::Other) {
                 finish = match default {
                     Override::Inherit => FieldFinish::UnwrapDefault,
-                    Override::Explicit(expr) => FieldFinish::UnwrapOrExpr(expr.to_token_stream()),
+                    Override::Explicit(expr) => FieldFinish::UnwrapOrExpr(expr.into()),
                 }
             } else {
                 errs.push(syn::Error::new(
