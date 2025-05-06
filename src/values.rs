@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
-use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::str::FromStr;
@@ -60,11 +59,11 @@ impl<T: ValueEnum> InferValueParser<T, &&&&()> {
         impl<T: ValueEnum> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
                 |v| {
-                    let s = v.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?;
                     // TODO: better diagnostics?
-                    Ok(T::parse_value(s).ok_or_else(|| {
-                        ErrorKind::InvalidValue(s.into(), "unknown variant".into())
-                    })?)
+                    v.to_str()
+                        .ok_or(ErrorKind::InvalidUtf8)
+                        .and_then(|s| T::parse_value(s).ok_or(ErrorKind::InvalidValue))
+                        .map_err(|err| err.with_input(v.into_owned()))
                 }
             }
         }
@@ -85,30 +84,47 @@ impl<T: From<OsString>> InferValueParser<T, &&&()> {
     }
 }
 
+// TODO: TryFrom.
 impl<T: From<String>> InferValueParser<T, &&()> {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
         impl sealed::Sealed for Info {}
         impl<T: From<String>> ArgValueInfo<T> for Info {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
-                |v| Ok(v.into_owned().into_string().map_err(ErrorKind::InvalidUtf8)?.into())
+                |v| {
+                    Ok(v.into_owned()
+                        .into_string()
+                        .map_err(|e| ErrorKind::InvalidUtf8.with_input(e))?
+                        .into())
+                }
             }
         }
         Info
     }
 }
 
-impl<T: FromStr<Err: fmt::Display>> InferValueParser<T, &()> {
+impl<T> InferValueParser<T, &()>
+where
+    // This implies either `T::Err` impls `std::error::Error` or it is string-like.
+    // Note that `&str: !std::error::Error`.
+    T: FromStr<Err: Into<Box<dyn std::error::Error + Send + Sync + 'static>>>,
+{
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
         impl sealed::Sealed for Info {}
-        impl<T: FromStr<Err: fmt::Display>> ArgValueInfo<T> for Info {
+        impl<T> ArgValueInfo<T> for Info
+        where
+            T: FromStr<Err: Into<Box<dyn std::error::Error + Send + Sync + 'static>>>,
+        {
             fn parser() -> impl Fn(Cow<'_, OsStr>) -> Result<T> {
                 |v| {
-                    Ok(v.to_str()
-                        .ok_or_else(|| ErrorKind::InvalidUtf8(v.to_os_string()))?
-                        .parse::<T>()
-                        .map_err(|err| ErrorKind::InvalidValue(v.into(), err.to_string()))?)
+                    let s = v
+                        .to_str()
+                        .ok_or_else(|| ErrorKind::InvalidUtf8.with_input(v.clone().into()))?;
+                    let t = s.parse::<T>().map_err(|err| {
+                        ErrorKind::InvalidValue.with_input(s.into()).with_source(err.into())
+                    })?;
+                    Ok(t)
                 }
             }
         }

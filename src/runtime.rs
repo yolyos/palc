@@ -93,12 +93,13 @@ impl<T: 'static> ParserState for FallbackState<T> {
 }
 impl<T: 'static> ParserStateDyn for FallbackState<T> {}
 
-pub fn unknown_subcommand<T>(arg: &str) -> Result<T> {
-    Err(ErrorKind::UnknownSubcommand(arg.into()).into())
+// TODO: Check inlining behavior is expected.
+pub fn unknown_subcommand<T>(name: &str) -> Result<T> {
+    Err(ErrorKind::UnknownSubcommand.with_input(name.into()))
 }
 
-pub fn missing_required_arg<T>(arg: &'static str) -> Result<T> {
-    Err(ErrorKind::MissingRequiredArgument.with_arg(arg))
+pub fn missing_required_arg<T>(enc_arg: &'static str) -> Result<T> {
+    Err(ErrorKind::MissingRequiredArgument.with_arg(enc_arg))
 }
 
 pub fn missing_required_subcmd<T>() -> Result<T> {
@@ -310,12 +311,13 @@ pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
             args: &mut ArgsIter<'_>,
             global: GlobalAncestors<'_>,
         ) -> Result<()> {
-            let name = name.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(name.clone()))?;
+            let name =
+                name.into_string().map_err(|name| ErrorKind::InvalidUtf8.with_input(name))?;
             let mut global = (&mut self.0, global);
             let global =
                 if CUR_HAS_GLOBAL { &mut global as &mut dyn GlobalChain } else { global.1 };
-            let subcmd = G::Subcommand::try_parse_with_name(name, args, global)
-                .map_err(|err| err.in_subcommand::<G::Subcommand>(name.to_owned()))?;
+            let subcmd = G::Subcommand::try_parse_with_name(&name, args, global)
+                .map_err(|err| err.in_subcommand::<G::Subcommand>(name))?;
             *G::get(&mut self.0) = Some(subcmd);
             Ok(())
         }
@@ -419,7 +421,7 @@ pub trait CommandInternal: Sized {
         _args: &mut ArgsIter<'_>,
         _global: GlobalAncestors<'_>,
     ) -> Result<Self> {
-        Err(ErrorKind::UnknownSubcommand(name.into()).into())
+        unknown_subcommand(name)
     }
 }
 
@@ -448,7 +450,7 @@ pub fn try_parse_with_state(
                             return place.feed_greedy(arg, args, global);
                         }
                         Err(Some(err)) => return Err(err),
-                        Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
+                        Err(None) => return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg)),
                     }
                 }
                 return Ok(());
@@ -464,14 +466,18 @@ pub fn try_parse_with_state(
                             if enc_name == "h" || enc_name == "help" {
                                 return Err(ErrorKind::Help.into());
                             }
-                            return Err(ErrorKind::UnknownNamedArgument.with_arg(enc_name));
+                            return Err(ErrorKind::UnknownNamedArgument.with_input(enc_name.into()));
                         }
                     },
                 };
                 match place.num_values() {
                     NumValues::Zero => {
-                        if let Some(v) = value {
-                            return Err(ErrorKind::UnexpectedValue(v.into()).with_arg(enc_name));
+                        // Only fail on long arguments with inlined values `--long=value`.
+                        if enc_name.len() > 1 {
+                            if let Some(v) = value {
+                                return Err(ErrorKind::UnexpectedInlineValue
+                                    .with_arg_input(enc_name, v.into()));
+                            }
                         }
                         place.feed_none()?;
                     }
@@ -492,7 +498,7 @@ pub fn try_parse_with_state(
                 Ok(None) => idx += 1,
                 Ok(Some(place)) => return place.feed_greedy(arg, args, global),
                 Err(Some(err)) => return Err(err),
-                Err(None) => return Err(ErrorKind::UnexpectedUnnamedArgument(arg).into()),
+                Err(None) => return Err(ErrorKind::ExtraUnnamedArgument.with_input(arg)),
             },
         }
     }
@@ -526,24 +532,38 @@ impl<'a> ArgsIter<'a> {
 
     /// Iterate the next logical argument, possibly splitting short argument bundle.
     fn next_arg<'b>(&mut self, buf: &'b mut OsString) -> Result<Option<Arg<'b>>> {
+        #[cold]
+        fn fail_on_next_short_arg(rest: &OsStr) -> Error {
+            let bytes = rest.as_encoded_bytes();
+
+            // UTF-8 length of a char must be 1..=4, len==1 case is checked outside.
+            for len in 2..=bytes.len().min(4) {
+                if let Ok(s) = std::str::from_utf8(&bytes[..len]) {
+                    return ErrorKind::UnknownNamedArgument.with_arg(s);
+                }
+            }
+            ErrorKind::InvalidUtf8.with_input(rest.into())
+        }
+
         if let Some(pos) = self.next_short_idx.filter(|pos| pos.get() < buf.len()) {
             let argb = buf.as_encoded_bytes();
             let idx = pos.get();
 
-            // Assume all valid short args are ASCII.
+            // By struct invariant, argb[..idx] must be UTF-8.
             let next_byte = std::str::from_utf8(&argb[idx..idx + 1]);
-            let short_arg = next_byte.map_err(|_| {
-                // By struct invariant, prefix must be UTF-8.
-                let rest = buf.index(idx..);
-                ErrorKind::UnknownNamedArgument.with_arg(rest)
-            })?;
+            // Assuming all valid short args are ASCII, if the next byte is not ASCII, it must fail.
+            let short_arg = next_byte.map_err(|_| fail_on_next_short_arg(buf.index(idx..)))?;
 
-            let value = match argb.get(idx + 1) {
-                Some(&b'=') => Some(buf.index(idx + 1..)),
-                Some(_) => Some(buf.index(idx..)),
-                None => None,
-            };
             self.next_short_idx = pos.checked_add(1);
+            let value = match argb.get(idx + 1) {
+                Some(&b'=') => Some(buf.index(idx + 2..)),
+                Some(_) => Some(buf.index(idx + 1..)),
+                None => {
+                    // Reached the end of bundle.
+                    self.discard_short_args();
+                    None
+                }
+            };
             return Ok(Some(Arg::EncodedNamed(short_arg, value)));
         }
         self.next_short_idx = None;
@@ -566,8 +586,9 @@ impl<'a> ArgsIter<'a> {
             };
             // Include proceeding "--" only for single-char long arguments.
             let enc_name = if name.len() != 1 { name } else { buf.index(..3) };
-            let enc_name =
-                enc_name.to_str().ok_or_else(|| ErrorKind::InvalidUtf8(enc_name.to_os_string()))?;
+            let enc_name = enc_name
+                .to_str()
+                .ok_or_else(|| ErrorKind::InvalidUtf8.with_input(enc_name.into()))?;
             Ok(Some(Arg::EncodedNamed(enc_name, value)))
         } else if buf.starts_with("-") && buf.len() != 1 {
             self.next_short_idx = Some(NonZero::new(1).unwrap());
