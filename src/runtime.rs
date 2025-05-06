@@ -155,6 +155,26 @@ pub fn place_for_flag(place: &mut Option<bool>) -> &mut dyn ArgPlace {
     Place::ref_cast_mut(place)
 }
 
+#[inline(always)]
+pub fn place_for_counter(place: &mut Option<u8>) -> &mut dyn ArgPlace {
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    struct Place(Option<u8>);
+
+    impl ArgPlace for Place {
+        fn num_values(&self) -> NumValues {
+            NumValues::Zero
+        }
+        fn feed_none(&mut self) -> Result<(), Error> {
+            let v = self.0.get_or_insert_default();
+            *v = v.saturating_add(1);
+            Ok(())
+        }
+    }
+
+    Place::ref_cast_mut(place)
+}
+
 pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
     place: &mut Option<Vec<T>>,
     _: A,

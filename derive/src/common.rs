@@ -9,6 +9,7 @@ use syn::{Attribute, GenericArgument, LitBool, LitChar, LitStr, PathArguments, T
 use syn::{Token, bracketed, token};
 
 pub const TY_BOOL: &str = "bool";
+pub const TY_U8: &str = "u8";
 pub const TY_OPTION: &str = "Option";
 pub const TY_VEC: &str = "Vec";
 
@@ -93,6 +94,7 @@ pub fn wrap_anon_item(tts: impl ToTokens) -> TokenStream {
 
 pub enum ArgTyKind<'a> {
     Bool,
+    U8,
     Option(&'a Type),
     Vec(&'a Type),
     OptionVec(&'a Type),
@@ -101,8 +103,16 @@ pub enum ArgTyKind<'a> {
 
 impl ArgTyKind<'_> {
     pub fn of(ty: &syn::Type) -> ArgTyKind<'_> {
-        if matches!(ty, Type::Path(p) if p.qself.is_none() && p.path.is_ident(TY_BOOL)) {
-            return ArgTyKind::Bool;
+        match ty {
+            Type::Path(p) if p.qself.is_none() => {
+                if p.path.is_ident(TY_BOOL) {
+                    return ArgTyKind::Bool;
+                }
+                if p.path.is_ident(TY_U8) {
+                    return ArgTyKind::U8;
+                }
+            }
+            _ => {}
         }
         if let Some(subty) = strip_ty_ctor(ty, TY_OPTION) {
             if let Some(subty) = strip_ty_ctor(subty, TY_VEC) {

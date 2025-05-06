@@ -169,6 +169,7 @@ struct FieldInfo<'i> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FieldKind {
     BoolSetTrue,
+    Counter,
     Option,
     OptionVec,
 }
@@ -339,6 +340,7 @@ pub fn expand_state_def_impl<'i>(
         #[rustfmt::skip]
         let (kind, effective_ty, mut finish) = match ty_kind {
             ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty, FieldFinish::UnwrapDefault),
+            ArgTyKind::U8 => (FieldKind::Counter, &field.ty, FieldFinish::UnwrapDefault),
             ArgTyKind::Vec(subty) => (FieldKind::OptionVec, subty, FieldFinish::UnwrapDefault),
             ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty, FieldFinish::Id),
             ArgTyKind::Option(subty) => (FieldKind::Option, subty, FieldFinish::Id),
@@ -560,7 +562,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
             let FieldInfo { ident, effective_ty, finish, kind, .. } = &fields[idx];
             field_names.push(*ident);
             match kind {
-                FieldKind::Option | FieldKind::BoolSetTrue => {
+                FieldKind::Counter | FieldKind::Option | FieldKind::BoolSetTrue => {
                     field_tys.push(quote! { __rt::Option<#effective_ty> });
                     field_inits.push(quote! { __rt::None });
                 }
@@ -675,6 +677,9 @@ impl ToTokens for FeedNamedImpl<'_> {
                 let action = match kind {
                     FieldKind::BoolSetTrue => {
                         quote! { __rt::place_for_flag(&mut self.#ident) }
+                    }
+                    FieldKind::Counter => {
+                        quote! { __rt::place_for_counter(&mut self.#ident) }
                     }
                     FieldKind::Option => quote_spanned! {effective_ty.span()=>
                         __rt::place_for_set_value::<_, _, #require_eq>(
@@ -954,7 +959,7 @@ impl ToTokens for RawArgsInfo<'_> {
             }
             buf.push('\n');
             match f.kind {
-                FieldKind::BoolSetTrue => {}
+                FieldKind::BoolSetTrue | FieldKind::Counter => {}
                 FieldKind::Option | FieldKind::OptionVec => {
                     buf.push_str(&f.value_display.value());
                     buf.push('\t');

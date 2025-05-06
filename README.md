@@ -43,7 +43,7 @@ Though some of clap features are not-yet-implemented.
     - [x] Force no named arguments `--`.
     - [x] Greedy/tail arguments (`arg(trailing_var_arg)`).
     - [x] Last arguments after `--` (`arg(last)`).
-  - [ ] Counting number of occurrence.
+  - [x] Counting number of occurrence.
   - [ ] Custom ArgAction.
   - [ ] Custom number of values (`arg(num_values)`).
   - [ ] Overrides.

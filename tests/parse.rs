@@ -156,6 +156,19 @@ fn optional() {
 }
 
 #[test]
+fn counter() {
+    #[derive(Debug, Clone, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(long, short)]
+        verbose: u8,
+    }
+
+    check([""], &Cli { verbose: 0 });
+    check(["", "-vv"], &Cli { verbose: 2 });
+    check(["", "--verbose", "-vv", "--verbose"], &Cli { verbose: 4 });
+}
+
+#[test]
 fn flatten() {
     #[derive(Debug, PartialEq, Parser)]
     struct Cli {
