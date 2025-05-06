@@ -43,6 +43,7 @@ Though some of clap features are not-yet-implemented.
     - [x] Force no named arguments `--`.
     - [x] Greedy/tail arguments (`arg(trailing_var_arg)`).
     - [x] Last arguments after `--` (`arg(last)`).
+  - [ ] Counting number of occurrence.
   - [ ] Custom ArgAction.
   - [ ] Custom number of values (`arg(num_values)`).
   - [ ] Overrides.
@@ -57,6 +58,7 @@ Though some of clap features are not-yet-implemented.
   - [x] Automatically picked custom parser via `From<OsString>`, `From<String>` or `FromStr`.
 
 - Argument validations:
+  - [ ] Duplicated arguments.
   - [x] Required.
     - [ ] Conditional required.
   - [x] Conflicts.
@@ -70,6 +72,7 @@ Though some of clap features are not-yet-implemented.
     - [ ] Flatten unnamed arguments.
   - [x] Subcommands.
     - [ ] Argv0 as subcommand (multi-call binary).
+    - [ ] Prefer parsing subcommand over unnamed arguments.
     - [x] Global args.
       - Note: Current implementation has limitations on the number of values it takes.
         And it only propagates up if the inner Args cannot accept the named arguments --

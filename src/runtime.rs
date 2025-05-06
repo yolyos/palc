@@ -455,7 +455,7 @@ pub fn try_parse_with_state(
                 }
                 return Ok(());
             }
-            Arg::EncodedNamed(enc_name, value) => {
+            Arg::EncodedNamed(enc_name, has_eq, value) => {
                 let place = match state.feed_named(enc_name) {
                     ControlFlow::Break(place) => place,
                     ControlFlow::Continue(()) => match global.search_global_named(enc_name) {
@@ -466,10 +466,19 @@ pub fn try_parse_with_state(
                             if enc_name == "h" || enc_name == "help" {
                                 return Err(ErrorKind::Help.into());
                             }
-                            return Err(ErrorKind::UnknownNamedArgument.with_input(enc_name.into()));
+                            let mut dec_name = String::with_capacity(2 + enc_name.len());
+                            // TODO: Dedup this code with `Error::fmt`.
+                            if enc_name.chars().nth(1).is_none() {
+                                dec_name.push('-');
+                            } else if !enc_name.starts_with("--") {
+                                dec_name.push_str("--");
+                            }
+                            dec_name.push_str(enc_name);
+                            return Err(ErrorKind::UnknownNamedArgument.with_input(dec_name.into()));
                         }
                     },
                 };
+
                 match place.num_values() {
                     NumValues::Zero => {
                         // Only fail on long arguments with inlined values `--long=value`.
@@ -482,14 +491,15 @@ pub fn try_parse_with_state(
                         place.feed_none()?;
                     }
                     NumValues::One { require_equals } => {
+                        if require_equals && !has_eq {
+                            return Err(ErrorKind::MissingEq.with_arg(enc_name));
+                        }
                         if let Some(v) = value {
                             place.feed(Cow::Borrowed(v))?;
                             args.discard_short_args();
-                        } else if !require_equals {
+                        } else {
                             let v = args.next_value(enc_name)?;
                             place.feed(Cow::Owned(v))?;
-                        } else {
-                            return Err(ErrorKind::MissingEq.with_arg(enc_name));
                         }
                     }
                 }
@@ -515,13 +525,13 @@ pub struct ArgsIter<'a> {
 enum Arg<'a> {
     /// "--"
     DashDash,
-    /// Encoded arg name and its inlined value (excluding `=`).
+    /// Encoded arg name, equal sign, and an inlined value (excluding `=`).
     ///
     /// - "--long" => ("long", None)
     /// - "--long=value" => ("long", Some("value"))
     /// - "-s" => ("s", None)
     /// - "-smore", "-s=more" => ("s", Some("more"))
-    EncodedNamed(&'a str, Option<&'a OsStr>),
+    EncodedNamed(&'a str, bool, Option<&'a OsStr>),
     Unnamed(OsString),
 }
 
@@ -539,7 +549,10 @@ impl<'a> ArgsIter<'a> {
             // UTF-8 length of a char must be 1..=4, len==1 case is checked outside.
             for len in 2..=bytes.len().min(4) {
                 if let Ok(s) = std::str::from_utf8(&bytes[..len]) {
-                    return ErrorKind::UnknownNamedArgument.with_arg(s);
+                    let mut dec_input = String::with_capacity(4);
+                    dec_input.push('-');
+                    dec_input.push_str(s);
+                    return ErrorKind::UnknownNamedArgument.with_input(dec_input.into());
                 }
             }
             ErrorKind::InvalidUtf8.with_input(rest.into())
@@ -555,16 +568,16 @@ impl<'a> ArgsIter<'a> {
             let short_arg = next_byte.map_err(|_| fail_on_next_short_arg(buf.index(idx..)))?;
 
             self.next_short_idx = pos.checked_add(1);
-            let value = match argb.get(idx + 1) {
-                Some(&b'=') => Some(buf.index(idx + 2..)),
-                Some(_) => Some(buf.index(idx + 1..)),
+            let (has_eq, value) = match argb.get(idx + 1) {
+                Some(&b'=') => (true, Some(buf.index(idx + 2..))),
+                Some(_) => (false, Some(buf.index(idx + 1..))),
                 None => {
                     // Reached the end of bundle.
                     self.discard_short_args();
-                    None
+                    (false, None)
                 }
             };
-            return Ok(Some(Arg::EncodedNamed(short_arg, value)));
+            return Ok(Some(Arg::EncodedNamed(short_arg, has_eq, value)));
         }
         self.next_short_idx = None;
 
@@ -580,16 +593,16 @@ impl<'a> ArgsIter<'a> {
             }
             // Using `strip_prefix` in if-condition requires polonius to make lifetime check.
             let rest = buf.index(2..);
-            let (name, value) = match rest.split_once('=') {
-                Some((name, value)) => (name, Some(value)),
-                None => (rest, None),
+            let (name, has_eq, value) = match rest.split_once('=') {
+                Some((name, value)) => (name, true, Some(value)),
+                None => (rest, false, None),
             };
             // Include proceeding "--" only for single-char long arguments.
             let enc_name = if name.len() != 1 { name } else { buf.index(..3) };
             let enc_name = enc_name
                 .to_str()
                 .ok_or_else(|| ErrorKind::InvalidUtf8.with_input(enc_name.into()))?;
-            Ok(Some(Arg::EncodedNamed(enc_name, value)))
+            Ok(Some(Arg::EncodedNamed(enc_name, has_eq, value)))
         } else if buf.starts_with("-") && buf.len() != 1 {
             self.next_short_idx = Some(NonZero::new(1).unwrap());
             return self.next_arg(buf);
