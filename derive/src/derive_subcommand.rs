@@ -23,13 +23,6 @@ pub(crate) fn expand(input: &DeriveInput) -> TokenStream {
         #[automatically_derived]
         impl __rt::CommandInternal for #name {
             const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = &__rt::RawCommandInfo::empty();
-            fn try_parse_with_name(
-                __name: &__rt::str,
-                __args: &mut __rt::ArgsIter<'_>,
-                __global: __rt::GlobalAncestors<'_>,
-            ) -> __rt::Result<Self> {
-                __rt::unimplemented!()
-            }
         }
     }));
     tts
@@ -51,18 +44,20 @@ impl ToTokens for VariantImpl<'_> {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         tokens.extend(match self {
             // Consume all rest args, possibly feed global arguments.
-            VariantImpl::Unit { variant_name } => quote! {{
-                __rt::try_parse_with_state(&mut (), __args, __global)?;
-                __rt::Ok(Self::#variant_name)
-            }},
-            VariantImpl::Tuple { variant_name, ty } => quote! {
-                __rt::Ok(Self::#variant_name(__rt::try_parse_args::<#ty>(__args, __global)?))
+            VariantImpl::Unit { variant_name } => quote! {
+                |__args, __global| {
+                    __rt::try_parse_with_state(&mut (), __args, __global)?;
+                    __rt::Ok(Self::#variant_name)
+                }
             },
-            VariantImpl::Struct { state_name } => quote! {{
-                let mut __state = <#state_name as __rt::ParserState>::init();
-                __rt::try_parse_with_state(&mut __state, __args, __global)?;
-                __rt::ParserState::finish(__state)
-            }},
+            VariantImpl::Tuple { variant_name, ty } => quote_spanned! {ty.span()=>
+                |__args, __global| {
+                    __rt::Ok(Self::#variant_name(__rt::try_parse_args::<#ty>(__args, __global)?))
+                }
+            },
+            VariantImpl::Struct { state_name } => quote! {
+                __rt::try_parse_state::<#state_name>
+            },
         });
     }
 }
@@ -167,15 +162,14 @@ impl ToTokens for SubcommandImpl<'_> {
             impl __rt::CommandInternal for #enum_name {
                 const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
 
-                fn try_parse_with_name(
-                    __name: &__rt::str,
-                    __args: &mut __rt::ArgsIter<'_>,
-                    __global: __rt::GlobalAncestors<'_>,
-                ) -> __rt::Result<Self> {
-                    match __name {
-                        #(#name_strs => #cases,)*
-                        _ => __rt::unknown_subcommand(__name),
-                    }
+                fn feed_subcommand(__name: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
+                    __rt::Some(match __name.to_str() {
+                        __rt::Some(__name) => match __name {
+                            #(#name_strs => #cases,)*
+                            _ => return __rt::None,
+                        },
+                        __rt::None => return __rt::None,
+                    })
                 }
             }
         });

@@ -90,12 +90,8 @@ impl ToTokens for ArgsImpl<'_> {
                 impl __rt::CommandInternal for #struct_name {
                     const RAW_COMMAND_INFO: &'static __rt::RawCommandInfo = #raw_cmd_info;
 
-                    fn try_parse_with_name(
-                        __name: &str,
-                        __args: &mut __rt::ArgsIter<'_>,
-                        __global: __rt::GlobalAncestors<'_>,
-                    ) -> __rt::Result<Self> {
-                        __rt::try_parse_args(__args, __global)
+                    fn feed_subcommand(_: &__rt::OsStr) -> __rt::FeedSubcommand<Self> {
+                        __rt::Some(__rt::try_parse_args::<Self>)
                     }
                 }
             });
@@ -784,6 +780,32 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             })
             .collect::<TokenStream>();
 
+        let has_global = def.named_fields.iter().any(|&i| def.fields[i].global);
+        let handle_subcmd = if let Some(SubcommandInfo { ident, effective_ty, .. }) =
+            &def.subcommand
+        {
+            let state_name = &def.state_name;
+            quote! {
+                struct __Subcommand;
+                impl __rt::GetSubcommand for __Subcommand {
+                    type State = #state_name;
+                    type Subcommand = #effective_ty;
+                    fn get(__this: &mut Self::State) -> &mut Option<Self::Subcommand> {
+                        &mut __this.#ident
+                    }
+                }
+                // TODO: We discard the parser fn here and reparse it in `place_for_subcommand`.
+                // It seems impossible to somehow return it by partly erase the subcommand type.
+                if !__is_last
+                    && <#effective_ty as __rt::CommandInternal>::feed_subcommand(__arg.as_os_str()).is_some()
+                {
+                    return __rt::place_for_subcommand::<__Subcommand, #has_global>(self);
+                }
+            }
+        } else {
+            TokenStream::new()
+        };
+
         let mut arms = TokenStream::new();
         for (ord, &i) in def.unnamed_fields.iter().enumerate() {
             let FieldInfo { ident, effective_ty, .. } = def.fields[i];
@@ -802,20 +824,9 @@ impl ToTokens for FeedUnnamedImpl<'_> {
                 let parsed = value_parsed(effective_ty);
                 quote! {{ self.#ident.get_or_insert_default().push(#parsed); __rt::Ok(__rt::None) }}
             }
-        } else if let Some(SubcommandInfo { ident, effective_ty, .. }) = def.subcommand {
-            let state_name = &def.state_name;
-            let has_global = def.named_fields.iter().any(|&i| def.fields[i].global);
-            quote! {{
-                struct __Getter;
-                impl __rt::GetSubcommand for __Getter {
-                    type State = #state_name;
-                    type Subcommand = #effective_ty;
-                    fn get(__this: &mut Self::State)  -> &mut Option<Self::Subcommand> {
-                        &mut __this.#ident
-                    }
-                }
-                __rt::place_for_subcommand::<__Getter, #has_global>(self)
-            }}
+        } else if def.subcommand.is_some() {
+            // Prefer to report "unknown subcommand" error for extra unnamed arguments.
+            quote! { __rt::place_for_subcommand::<__Subcommand, #has_global>(self) }
         } else {
             quote! { __rt::Err(__rt::None) }
         };
@@ -851,6 +862,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             ) -> __rt::FeedUnnamed {
                 #asserts
                 #handle_last
+                #handle_subcmd
                 #non_last
             }
         });
@@ -962,8 +974,8 @@ impl ToTokens for RawArgsInfo<'_> {
         } else {
             let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
             let mut asserts = TokenStream::new();
-            for ty in tys.clone(){
-                asserts.extend(quote_spanned! {ty.span()=> 
+            for ty in tys.clone() {
+                asserts.extend(quote_spanned! {ty.span()=>
                     __rt::assert!(
                         <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__subcommand.is_none(),
                         "cannot flatten an Args with subcommand",

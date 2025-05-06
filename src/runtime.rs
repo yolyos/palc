@@ -94,7 +94,7 @@ impl<T: 'static> ParserState for FallbackState<T> {
 impl<T: 'static> ParserStateDyn for FallbackState<T> {}
 
 // TODO: Check inlining behavior is expected.
-pub fn unknown_subcommand<T>(name: &str) -> Result<T> {
+pub fn unknown_subcommand<T>(name: &OsStr) -> Result<T> {
     Err(ErrorKind::UnknownSubcommand.with_input(name.into()))
 }
 
@@ -311,13 +311,10 @@ pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
             args: &mut ArgsIter<'_>,
             global: GlobalAncestors<'_>,
         ) -> Result<()> {
-            let name =
-                name.into_string().map_err(|name| ErrorKind::InvalidUtf8.with_input(name))?;
             let mut global = (&mut self.0, global);
             let global =
                 if CUR_HAS_GLOBAL { &mut global as &mut dyn GlobalChain } else { global.1 };
-            let subcmd = G::Subcommand::try_parse_with_name(&name, args, global)
-                .map_err(|err| err.in_subcommand::<G::Subcommand>(name))?;
+            let subcmd = G::Subcommand::try_parse_with_name(name, args, global)?;
             *G::get(&mut self.0) = Some(subcmd);
             Ok(())
         }
@@ -411,22 +408,47 @@ impl Args for () {
 }
 impl Sealed for () {}
 
+/// The parser fn signature that matches [`try_parse_args`].
+type ArgsParserFn<T> = fn(args: &mut ArgsIter<'_>, global: GlobalAncestors<'_>) -> Result<T>;
+
+#[cfg(test)]
+fn _assert_args_fn_sig<A: Args>() -> ArgsParserFn<A> {
+    try_parse_args::<A>
+}
+
+pub type FeedSubcommand<T> = Option<ArgsParserFn<T>>;
+
 pub trait CommandInternal: Sized {
     // This is stored as reference, since we always use it as a reference in
     // reflection structure. There is no benefit to inline it.
     const RAW_COMMAND_INFO: &'static RawCommandInfo;
 
+    fn feed_subcommand(_name: &OsStr) -> FeedSubcommand<Self> {
+        None
+    }
+
     fn try_parse_with_name(
-        name: &str,
-        _args: &mut ArgsIter<'_>,
-        _global: GlobalAncestors<'_>,
+        name: OsString,
+        args: &mut ArgsIter<'_>,
+        global: GlobalAncestors<'_>,
     ) -> Result<Self> {
-        unknown_subcommand(name)
+        let Some(f) = Self::feed_subcommand(&name) else {
+            return unknown_subcommand(&name);
+        };
+        // There is a matching subcommand, thus `name` must be UTF-8.
+        f(args, global).map_err(|err| err.in_subcommand::<Self>(name.into_string().unwrap()))
     }
 }
 
 pub fn try_parse_args<A: Args>(args: &mut ArgsIter<'_>, global: GlobalAncestors<'_>) -> Result<A> {
-    let mut state = A::__State::init();
+    try_parse_state::<A::__State>(args, global)
+}
+
+pub fn try_parse_state<S: ParserState>(
+    args: &mut ArgsIter<'_>,
+    global: GlobalAncestors<'_>,
+) -> Result<S::Output> {
+    let mut state = S::init();
     try_parse_with_state(&mut state, args, global)?;
     state.finish()
 }

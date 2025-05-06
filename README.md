@@ -72,7 +72,7 @@ Though some of clap features are not-yet-implemented.
     - [ ] Flatten unnamed arguments.
   - [x] Subcommands.
     - [ ] Argv0 as subcommand (multi-call binary).
-    - [ ] Prefer parsing subcommand over unnamed arguments.
+    - [x] Prefer parsing subcommand over unnamed arguments.
     - [x] Global args.
       - Note: Current implementation has limitations on the number of values it takes.
         And it only propagates up if the inner Args cannot accept the named arguments --

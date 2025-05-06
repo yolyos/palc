@@ -104,10 +104,9 @@ fn required() {
     );
     check_err::<Cli>(["", "path", "sub"], expect!["argument '--key' is required but not provided"]);
 
-    // FIXME: Prefer subcommand over unnamed arguments.
     check_err::<Cli>(
         ["", "--key", "value", "sub"],
-        expect!["subcommand is required but not provided"],
+        expect!["argument 'FILE' is required but not provided"],
     );
 
     let expect = Cli { key: "value".into(), file: "path".into(), sub: Sub::Sub };
@@ -134,8 +133,7 @@ fn optional() {
     check(["", "--key", "value"], &Cli { key: Some("value".into()), ..default.clone() });
     check(["", "path"], &Cli { file: Some("path".into()), ..default.clone() });
 
-    // FIXME: Prefer subcommand over unnamed arguments.
-    // check(["", "sub"], &Cli { sub: Some(Sub::Sub), ..default.clone() });
+    check(["", "sub"], &Cli { sub: Some(Sub::Sub), ..default.clone() });
 
     check(
         ["", "--key", "sub", "path"],
@@ -221,7 +219,7 @@ fn unknown_args() {
     check_err::<Cli>(["", "path1", "path2"], expect!["unexpected argument 'path2'"]);
 
     check_err::<CliWithSub>(["", "path1", "path2"], expect!["unrecognized subcommand 'path2'"]);
-    check_err::<CliWithSub>(["", "sub", "path"], expect!["unrecognized subcommand 'path'"]);
+    check_err::<CliWithSub>(["", "sub", "path"], expect!["unexpected argument 'path'"]);
 }
 
 #[cfg(unix)]

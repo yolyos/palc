@@ -81,10 +81,9 @@ fn try_parse_from_command<C: CommandInternal>(
 ) -> Result<C> {
     let arg0 = PathBuf::from(iter.next().ok_or(ErrorKind::MissingArg0)?);
     // A non-UTF8 program name does not matter in help. Multi-call commands will fail anyway.
-    let program_name = arg0.file_name().unwrap_or(arg0.as_ref()).to_string_lossy();
+    let program_name = arg0.file_name().unwrap_or(arg0.as_ref()).to_owned();
     let mut args = ArgsIter::new(iter);
-    CommandInternal::try_parse_with_name(&program_name, &mut args, &mut ())
-        .map_err(|err| err.in_subcommand::<C>(program_name.into_owned()))
+    CommandInternal::try_parse_with_name(program_name, &mut args, &mut ())
 }
 
 /// A group of arguments for composing larger interface.
