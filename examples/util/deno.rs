@@ -38,7 +38,6 @@ To evaluate code in the shell:
 #[derive(Parser, Debug, Clone)]
 #[command(
   name = "deno",
-  max_term_width = 0,
   after_help = ENV_VARIABLES_HELP,
   long_about = DENO_HELP,
 )]

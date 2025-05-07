@@ -387,10 +387,21 @@ impl CommandMeta {
 
     fn parse_update(&mut self, meta: &ParseNestedMeta<'_>) -> syn::Result<()> {
         let path = &meta.path;
+        let span = path.span();
+
+        macro_rules! check_dup {
+            ($name:ident) => {
+                if self.$name.is_some() {
+                    return Err(syn::Error::new(
+                        span,
+                        concat!("duplicated arg(", stringify!($name), ")"),
+                    ));
+                }
+            };
+        }
+
         if path.is_ident("name") {
-            if self.name.is_some() {
-                return Err(syn::Error::new(path.span(), "duplicated attribute"));
-            }
+            check_dup!(name);
             self.name = Some(meta.value()?.parse()?);
         } else if path.is_ident("version") {
             parse_unique_override(&mut self.version, meta)?;
@@ -401,9 +412,17 @@ impl CommandMeta {
         } else if path.is_ident("long_about") {
             parse_unique_override(&mut self.long_about, meta)?;
         } else if path.is_ident("after_help") {
+            check_dup!(after_help);
             self.after_help = Some(meta.value()?.parse()?);
         } else if path.is_ident("after_long_help") {
+            check_dup!(after_long_help);
             self.after_long_help = Some(meta.value()?.parse()?);
+        } else if path.is_ident("term_width") || path.is_ident("max_term_width") {
+            return Err(syn::Error::new(
+                span,
+                "command({max_,}term_width) are intentionally NOT supported, \
+                because line-wrapping's drawback outweighs its benefits.",
+            ));
         } else {
             if cfg!(feature = "__test-allow-unknown-fields") {
                 if meta.input.peek(Token![=]) {

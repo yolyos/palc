@@ -94,8 +94,14 @@ Though some of clap features are not-yet-implemented.
   - [ ] Error suggestions ("did you mean").
   - [ ] Custom help template.
 
+- Term features:
+  - [ ] Colored output.
+  - Wrap on terminal width.
+    - We do not plan to implement this for now because its drawback outweighs
+      its benefits. Word splitting and text rendering length with Unicode
+      support is be very tricky and costly. It also hurts output reproducibility.
+
 - [ ] Reflection.
-- [ ] Colored output.
 - [ ] Completions.
 
 </details>
