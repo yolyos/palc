@@ -17,7 +17,7 @@ struct Inner {
 
     /// The argument we are parsing into, when the error occurs.
     /// For unknown arguments or subcommand, this is `None`.
-    enc_arg: Option<String>,
+    arg_display: Option<String>,
     // The unexpected raw input we are parsing, when the error occurs.
     /// For finalization errors like constraint violation, this is `None`.
     input: Option<OsString>,
@@ -67,7 +67,7 @@ impl fmt::Debug for Error {
         let e = &*self.0;
         let mut s = f.debug_struct("Error");
         s.field("kind", &e.kind)
-            .field("enc_arg", &e.enc_arg)
+            .field("arg_display", &e.arg_display)
             .field("input", &e.input)
             .field("source", &e.source);
         #[cfg(feature = "help")]
@@ -93,15 +93,9 @@ impl fmt::Display for Error {
         };
         let opt_arg = |f: &mut fmt::Formatter<'_>, with_for: bool| {
             // TODO: Detail argument syntax.
-            if let Some(enc_arg) = &e.enc_arg {
+            if let Some(arg) = &e.arg_display {
                 f.write_str(if with_for { " for '" } else { " '" })?;
-                // Short arguments must have only 1 char.
-                if enc_arg.chars().nth(1).is_none() {
-                    f.write_str("-")?;
-                } else if !enc_arg.starts_with("--") {
-                    f.write_str("--")?;
-                }
-                f.write_str(enc_arg)?;
+                f.write_str(arg)?;
                 f.write_str("'")?;
             }
             Ok(())
@@ -150,12 +144,7 @@ impl fmt::Display for Error {
 
             ErrorKind::MissingRequiredArgument => {
                 f.write_str("argument")?;
-                // FIXME: Unnamed arguments should not show `--` prefix.
-                if let Some(arg) = &e.enc_arg {
-                    f.write_str(" '")?;
-                    f.write_str(arg)?;
-                    f.write_str("'")?;
-                }
+                opt_arg(f, false)?;
                 f.write_str(" is required but not provided")
             }
             ErrorKind::MissingRequiredSubcommand => {
@@ -177,10 +166,10 @@ impl fmt::Display for Error {
 }
 
 impl Error {
-    fn new(kind: ErrorKind, enc_arg: Option<String>, input: Option<OsString>) -> Self {
+    fn new(kind: ErrorKind, arg_display: Option<String>, input: Option<OsString>) -> Self {
         Self(Box::new(Inner {
             kind,
-            enc_arg,
+            arg_display,
             input,
             source: None,
             #[cfg(feature = "help")]
@@ -196,8 +185,15 @@ impl Error {
         e
     }
 
-    pub(crate) fn with_arg(mut self, enc_arg: String) -> Self {
-        self.0.enc_arg = Some(enc_arg);
+    pub(crate) fn with_named_arg(mut self, enc_arg: &str) -> Self {
+        let mut buf = String::with_capacity(2 + enc_arg.len());
+        if enc_arg.chars().nth(1).is_none() {
+            buf.push('-');
+        } else if !enc_arg.starts_with("--") {
+            buf.push_str("--");
+        }
+        buf.push_str(enc_arg);
+        self.0.arg_display = Some(buf);
         self
     }
 
@@ -232,12 +228,12 @@ impl ErrorKind {
     }
 
     #[cold]
-    pub(crate) fn with_arg(self, enc_arg: &str) -> Error {
-        Error::new(self, Some(enc_arg.into()), None)
+    pub(crate) fn with_arg_display(self, arg_display: &str) -> Error {
+        Error::new(self, Some(arg_display.into()), None)
     }
 
     #[cold]
-    pub(crate) fn with_arg_input(self, enc_arg: &str, input: OsString) -> Error {
-        Error::new(self, Some(enc_arg.into()), Some(input))
+    pub(crate) fn with_named_arg(self, enc_arg: &str) -> Error {
+        Error::from(self).with_named_arg(enc_arg)
     }
 }

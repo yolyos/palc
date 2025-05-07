@@ -98,8 +98,8 @@ pub fn unknown_subcommand<T>(name: &OsStr) -> Result<T> {
     Err(ErrorKind::UnknownSubcommand.with_input(name.into()))
 }
 
-pub fn missing_required_arg<T>(enc_arg: &'static str) -> Result<T> {
-    Err(ErrorKind::MissingRequiredArgument.with_arg(enc_arg))
+pub fn missing_required_arg<T>(arg_display: &'static str) -> Result<T> {
+    Err(ErrorKind::MissingRequiredArgument.with_arg_display(arg_display))
 }
 
 pub fn missing_required_subcmd<T>() -> Result<T> {
@@ -107,8 +107,8 @@ pub fn missing_required_subcmd<T>() -> Result<T> {
 }
 
 // TODO: Detail errors.
-pub fn fail_constraint<T>(arg: &'static str) -> Result<T> {
-    Err(ErrorKind::Constraint.with_arg(arg))
+pub fn fail_constraint<T>(arg_display: &'static str) -> Result<T> {
+    Err(ErrorKind::Constraint.with_arg_display(arg_display))
 }
 
 #[inline]
@@ -584,19 +584,16 @@ pub fn try_parse_with_state(
                 match place.num_values() {
                     NumValues::Zero => {
                         // Only fail on long arguments with inlined values `--long=value`.
-                        if enc_name.len() > 1 {
-                            if let Some(v) = value {
-                                return Err(ErrorKind::UnexpectedInlineValue
-                                    .with_arg_input(enc_name, v.into()));
-                            }
+                        if let Some(v) = value.filter(|_| enc_name.len() > 1) {
+                            Err(ErrorKind::UnexpectedInlineValue.with_input(v.into()))
+                        } else {
+                            place.feed_none()
                         }
-                        place.feed_none()
                     }
                     NumValues::One { require_equals, accept_hyphen } => {
                         if require_equals && !has_eq {
-                            return Err(ErrorKind::MissingEq.with_arg(enc_name));
-                        }
-                        if let Some(v) = value {
+                            Err(ErrorKind::MissingEq.into())
+                        } else if let Some(v) = value {
                             args.discard_short_args();
                             place.feed(Cow::Borrowed(v))
                         } else {
@@ -605,7 +602,7 @@ pub fn try_parse_with_state(
                         }
                     }
                 }
-                .map_err(|err| err.with_arg(enc_name.into()))?;
+                .map_err(|err| err.with_named_arg(enc_name))?;
             }
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, idx, false) {
                 Ok(None) => idx += 1,
@@ -734,6 +731,6 @@ impl<'a> ArgsIter<'a> {
                     _ => false,
                 }
             })
-            .ok_or_else(|| ErrorKind::MissingValue.with_arg(enc_name))
+            .ok_or_else(|| ErrorKind::MissingValue.with_named_arg(enc_name))
     }
 }
