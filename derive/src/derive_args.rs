@@ -415,7 +415,7 @@ pub fn expand_state_def_impl<'i>(
             ));
         }
 
-        let not_none = matches!(finish, FieldFinish::UnwrapChecked);
+        let not_none = arg.required || matches!(finish, FieldFinish::UnwrapChecked);
 
         let value_display = match &arg.value_name {
             Some(s) => s.clone(),

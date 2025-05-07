@@ -407,3 +407,37 @@ fn trailing_args() {
     check(["", "a", "-v"], &Yes { any: vec!["a".into(), "-v".into()], verbose: false });
     // TODO: check(["", "-x"], &Yes { any: vec!["-x".into()], verbose: false });
 }
+
+#[test]
+fn constraint() {
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct Required {
+        #[arg(long, required = true)]
+        key: Vec<String>,
+        #[arg(required = true)]
+        files: Vec<String>,
+        #[arg(short, required = true)]
+        force: bool,
+        #[arg(short, required = true)]
+        verbose: u8,
+    }
+
+    check_err::<Required>([""], expect!["argument '--key' is required but not provided"]);
+    check_err::<Required>(
+        ["", "--key=foo"],
+        expect!["argument 'FILES' is required but not provided"],
+    );
+    check_err::<Required>(
+        ["", "--key=foo", "path"],
+        expect!["argument '-f' is required but not provided"],
+    );
+    check_err::<Required>(
+        ["", "--key=foo", "path", "-f"],
+        expect!["argument '-v' is required but not provided"],
+    );
+
+    check(
+        ["", "--key=foo", "path", "-fvv"],
+        &Required { key: vec!["foo".into()], files: vec!["path".into()], force: true, verbose: 2 },
+    )
+}

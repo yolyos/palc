@@ -208,7 +208,6 @@ pub struct ArgMeta {
     pub value_delimiter: Option<syn::LitChar>,
     // TODO: num_args,
     // index, action, value_terminator, default_missing_value*, env
-    // Not needed: required
 
     // Help & completion.
     pub help: Option<LitStr>,
@@ -217,6 +216,7 @@ pub struct ArgMeta {
     // TODO: add, hide_*, next_line_help, help_heading, display_order
 
     // Validation.
+    pub required: bool,
     pub exclusive: bool,
     pub requires: Vec<FieldPath>,
     pub conflicts_with: Vec<FieldPath>,
@@ -305,6 +305,9 @@ impl ArgMeta {
         } else if path.is_ident("hide") {
             check_true!();
             self.hide = true;
+        } else if path.is_ident("required") {
+            check_true!();
+            self.required = true;
         } else if path.is_ident("exclusive") {
             check_true!();
             self.exclusive = true;
