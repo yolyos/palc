@@ -109,6 +109,11 @@ fn required() {
         expect!["argument 'FILE' is required but not provided"],
     );
 
+    check_err::<Cli>(
+        ["", "--key", "value", "--key=value"],
+        expect!["the argument '--key' cannot be used multiple times"],
+    );
+
     let expect = Cli { key: "value".into(), file: "path".into(), sub: Sub::Sub };
     check(["", "path", "--key", "value", "sub"], &expect);
     check(["", "--key", "value", "path", "sub"], &expect);
@@ -152,6 +157,15 @@ fn optional() {
             file: Some("path".into()),
             sub: Some(Sub::Sub),
         },
+    );
+
+    check_err::<Cli>(
+        ["", "--key", "value", "--key=value"],
+        expect!["the argument '--key' cannot be used multiple times"],
+    );
+    check_err::<Cli>(
+        ["", "--flag", "--flag"],
+        expect!["the argument '--flag' cannot be used multiple times"],
     );
 }
 
@@ -325,6 +339,8 @@ fn global() {
         &Cli { verbose: false, debug: Some(2), sub: Sub2::Deep { verbose: false } },
     );
 
-    // FIXME: Duplicated arguments.
-    // check_err::<Cli>(["", "-d2", "deep", "-d0"], expect![]);
+    check_err::<Cli>(
+        ["", "-d2", "deep", "-d0"],
+        expect!["the argument '-d' cannot be used multiple times"],
+    );
 }

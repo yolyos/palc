@@ -147,6 +147,9 @@ pub fn place_for_flag(place: &mut Option<bool>) -> &mut dyn ArgPlace {
             NumValues::Zero
         }
         fn feed_none(&mut self) -> Result<(), Error> {
+            if self.0.is_some() {
+                return Err(ErrorKind::DuplicatedNamedArgument.into());
+            }
             self.0 = Some(true);
             Ok(())
         }
@@ -242,6 +245,9 @@ pub fn place_for_set_value<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
+            if self.0.is_some() {
+                return Err(ErrorKind::DuplicatedNamedArgument.into());
+            }
             self.0 = Some(A::parser()(value)?);
             Ok(())
         }
@@ -530,21 +536,22 @@ pub fn try_parse_with_state(
                                     .with_arg_input(enc_name, v.into()));
                             }
                         }
-                        place.feed_none()?;
+                        place.feed_none()
                     }
                     NumValues::One { require_equals } => {
                         if require_equals && !has_eq {
                             return Err(ErrorKind::MissingEq.with_arg(enc_name));
                         }
                         if let Some(v) = value {
-                            place.feed(Cow::Borrowed(v))?;
                             args.discard_short_args();
+                            place.feed(Cow::Borrowed(v))
                         } else {
                             let v = args.next_value(enc_name)?;
-                            place.feed(Cow::Owned(v))?;
+                            place.feed(Cow::Owned(v))
                         }
                     }
                 }
+                .map_err(|err| err.with_arg(enc_name.into()))?;
             }
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, idx, false) {
                 Ok(None) => idx += 1,

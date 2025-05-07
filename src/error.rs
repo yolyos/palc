@@ -35,6 +35,7 @@ pub(crate) enum ErrorKind {
     InvalidUtf8,
     UnknownNamedArgument,
     UnknownSubcommand,
+    DuplicatedNamedArgument,
     ExtraUnnamedArgument,
     UnexpectedInlineValue,
     MissingValue,
@@ -90,10 +91,10 @@ impl fmt::Display for Error {
             }
             Ok(())
         };
-        let opt_for_arg = |f: &mut fmt::Formatter<'_>| {
+        let opt_arg = |f: &mut fmt::Formatter<'_>, with_for: bool| {
             // TODO: Detail argument syntax.
             if let Some(enc_arg) = &e.enc_arg {
-                f.write_str(" for '")?;
+                f.write_str(if with_for { " for '" } else { " '" })?;
                 // Short arguments must have only 1 char.
                 if enc_arg.chars().nth(1).is_none() {
                     f.write_str("-")?;
@@ -105,6 +106,7 @@ impl fmt::Display for Error {
             }
             Ok(())
         };
+        let opt_for_arg = |f: &mut fmt::Formatter<'_>| opt_arg(f, true);
 
         match &e.kind {
             ErrorKind::MissingArg0 => f.write_str("missing executable argument (argv[0])"),
@@ -116,6 +118,11 @@ impl fmt::Display for Error {
             ErrorKind::UnknownSubcommand => {
                 f.write_str("unrecognized subcommand")?;
                 opt_input(f)
+            }
+            ErrorKind::DuplicatedNamedArgument => {
+                f.write_str("the argument")?;
+                opt_arg(f, false)?;
+                f.write_str(" cannot be used multiple times")
             }
             ErrorKind::ExtraUnnamedArgument => {
                 f.write_str("unexpected argument")?;
@@ -143,6 +150,7 @@ impl fmt::Display for Error {
 
             ErrorKind::MissingRequiredArgument => {
                 f.write_str("argument")?;
+                // FIXME: Unnamed arguments should not show `--` prefix.
                 if let Some(arg) = &e.enc_arg {
                     f.write_str(" '")?;
                     f.write_str(arg)?;
@@ -186,6 +194,11 @@ impl Error {
         let mut e = Self::new(ErrorKind::Custom, None, None);
         e.0.source = Some(source);
         e
+    }
+
+    pub(crate) fn with_arg(mut self, enc_arg: String) -> Self {
+        self.0.enc_arg = Some(enc_arg);
+        self
     }
 
     pub(crate) fn with_source(mut self, source: DynStdError) -> Self {

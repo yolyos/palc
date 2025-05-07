@@ -52,13 +52,13 @@ Though some of clap features are not-yet-implemented.
     - [ ] Default missing values.
     - [ ] Default from env.
 
-- Argument parsing:
+- Argument value parsing:
   - [x] `derive(ValueEnum)`
   - [x] Non-UTF-8 inputs `PathBuf`, `OsString`.
   - [x] Automatically picked custom parser via `From<OsString>`, `From<String>` or `FromStr`.
 
 - Argument validations:
-  - [ ] Duplicated arguments.
+  - [x] Reject duplicated arguments.
   - [x] Required.
     - [ ] Conditional required.
   - [x] Conflicts.
