@@ -344,3 +344,66 @@ fn global() {
         expect!["the argument '-d' cannot be used multiple times"],
     );
 }
+
+#[test]
+fn hyphen_named() {
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(long)]
+        no: Option<String>,
+        #[arg(long, allow_hyphen_values = true)]
+        yes: Option<String>,
+        #[arg(long, allow_negative_numbers = true)]
+        number: Option<i32>,
+
+        #[arg(short = '1')]
+        one: bool,
+        #[arg(short)]
+        flag: bool,
+    }
+
+    check_err::<Cli>(
+        ["", "--no", "-1"],
+        expect!["a value is required for '--no' but none was supplied"],
+    );
+    check_err::<Cli>(
+        ["", "--no", "-f"],
+        expect!["a value is required for '--no' but none was supplied"],
+    );
+
+    check_err::<Cli>(
+        ["", "--number", "-f"],
+        expect!["a value is required for '--number' but none was supplied"],
+    );
+    check(["", "--number", "-1"], &Cli { number: Some(-1), ..Cli::default() });
+
+    check(["", "--yes", "-1"], &Cli { yes: Some("-1".into()), ..Cli::default() });
+    check(["", "--yes", "-f"], &Cli { yes: Some("-f".into()), ..Cli::default() });
+}
+
+#[test]
+fn trailing_args() {
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct No {
+        #[arg(trailing_var_arg = true)]
+        any: Vec<String>,
+        #[arg(short)]
+        verbose: bool,
+    }
+
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct Yes {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        any: Vec<String>,
+        #[arg(short)]
+        verbose: bool,
+    }
+
+    check(["", "-v"], &No { any: Vec::new(), verbose: true });
+    check(["", "a", "-v"], &No { any: vec!["a".into(), "-v".into()], verbose: false });
+    check_err::<No>(["", "-x"], expect!["unexpected argument '-x'"]);
+
+    check(["", "-v"], &Yes { any: Vec::new(), verbose: true });
+    check(["", "a", "-v"], &Yes { any: vec!["a".into(), "-v".into()], verbose: false });
+    // TODO: check(["", "-x"], &Yes { any: vec!["-x".into()], verbose: false });
+}

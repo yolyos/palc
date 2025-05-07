@@ -194,6 +194,8 @@ pub struct ArgMeta {
     // Named argument behaviors.
     pub require_equals: bool,
     pub global: bool,
+    pub allow_hyphen_values: bool,
+    pub allow_negative_numbers: bool,
 
     // Unnamed argument behaviors.
     pub trailing_var_arg: bool,
@@ -270,6 +272,12 @@ impl ArgMeta {
         } else if path.is_ident("global") {
             check_true!();
             self.global = true;
+        } else if path.is_ident("allow_hyphen_values") {
+            check_true!();
+            self.allow_hyphen_values = true;
+        } else if path.is_ident("allow_negative_numbers") {
+            check_true!();
+            self.allow_negative_numbers = true;
         } else if path.is_ident("trailing_var_arg") {
             check_true!();
             self.trailing_var_arg = true;

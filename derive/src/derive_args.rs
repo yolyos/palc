@@ -149,6 +149,7 @@ struct FieldInfo<'i> {
     require_eq: bool,
     global: bool,
     value_delimiter: Option<syn::LitChar>,
+    accept_hyphen: AcceptHyphen,
 
     // Validations //
     not_none: bool,
@@ -172,6 +173,13 @@ enum FieldKind {
     Counter,
     Option,
     OptionVec,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum AcceptHyphen {
+    No = 0,
+    OnlyNumber,
+    Yes,
 }
 
 #[derive(Clone, Copy)]
@@ -384,6 +392,28 @@ pub fn expand_state_def_impl<'i>(
                 arg.value_delimiter = None;
             }
         }
+        let accept_hyphen = match (arg.allow_hyphen_values, arg.allow_negative_numbers) {
+            (true, false) => AcceptHyphen::Yes,
+            (false, true) => AcceptHyphen::OnlyNumber,
+            (false, false) => AcceptHyphen::No,
+            (true, true) => {
+                // TODO: More accurate spans.
+                errs.push(Error::new(
+                    ident.span(),
+                    "arg(allow_hyphen_values) and arg(allow_negative_numbers) \
+                        conflict with each other",
+                ));
+                AcceptHyphen::No
+            }
+        };
+        if accept_hyphen != AcceptHyphen::No
+            && matches!(kind, FieldKind::BoolSetTrue | FieldKind::Counter)
+        {
+            errs.push(Error::new(
+                ident.span(),
+                "Only arguments that take values can allow hyphen values",
+            ));
+        }
 
         let not_none = matches!(finish, FieldFinish::UnwrapChecked);
 
@@ -466,6 +496,7 @@ pub fn expand_state_def_impl<'i>(
                 require_eq: arg.require_equals,
                 global: arg.global,
                 value_delimiter: arg.value_delimiter,
+                accept_hyphen,
                 not_none,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -506,6 +537,7 @@ pub fn expand_state_def_impl<'i>(
                 require_eq: false,
                 global: false,
                 value_delimiter: arg.value_delimiter,
+                accept_hyphen,
                 not_none,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -516,20 +548,34 @@ pub fn expand_state_def_impl<'i>(
                 hide: arg.hide,
             });
 
-            if arg.last {
+            let allow_accept_hyphen = if arg.last {
                 // Last argument(s).
                 if let Some(prev) = out.last_field.replace(field_idx) {
                     errs.push(Error::new(ident.span(), "duplicated arg(last)"));
                     errs.push(Error::new(out.fields[prev].ident.span(), "previously defined here"));
                 }
+
+                // `allow_hyphen_values` is allowed for last arguments, though it is already assumed.
+                true
             } else if is_vec_like {
                 // Variable length unnamed argument.
+
                 let greedy = arg.trailing_var_arg;
                 check_variable_len_arg(&mut errs, ident.span());
                 out.catchall_field = Some(CatchallFieldInfo { field_idx, greedy });
+                greedy
             } else {
                 // Single unnamed argument.
                 out.unnamed_fields.push(field_idx);
+                false
+            };
+
+            if accept_hyphen != AcceptHyphen::No && !allow_accept_hyphen {
+                errs.push(Error::new(
+                    ident.span(),
+                    "arg(allow_hyphen_values) can only be used on \
+                    named arguments or arg(trailing_var_arg) yet",
+                ));
             }
         }
     }
@@ -607,6 +653,11 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let flatten_tys = self.flatten_fields.iter().map(|f| f.effective_ty);
         let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
 
+        let unnamed_arg_accept_hyphen =
+            self.catchall_field
+                .as_ref()
+                .map_or(AcceptHyphen::No, |f| fields[f.field_idx].accept_hyphen) as u8;
+
         let raw_args_info = RawArgsInfo(self);
 
         tokens.extend(quote! {
@@ -644,6 +695,10 @@ impl ToTokens for ParserStateDefImpl<'_> {
             impl __rt::ParserStateDyn for #state_name {
                 #feed_named_func
                 #feed_unnamed_func
+
+                fn unnamed_arg_accept_hyphen(&self) -> __rt::u8 {
+                    #unnamed_arg_accept_hyphen
+                }
             }
         });
     }
@@ -671,9 +726,11 @@ impl ToTokens for FeedNamedImpl<'_> {
                     arg_name_matchee,
                     require_eq,
                     value_delimiter,
+                    accept_hyphen,
                     ..
                 } = &def.fields[idx];
                 let value_info = value_info(effective_ty);
+                let allow_hyphen_conf = *accept_hyphen as u8;
                 let action = match kind {
                     FieldKind::BoolSetTrue => {
                         quote! { __rt::place_for_flag(&mut self.#ident) }
@@ -682,20 +739,20 @@ impl ToTokens for FeedNamedImpl<'_> {
                         quote! { __rt::place_for_counter(&mut self.#ident) }
                     }
                     FieldKind::Option => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_set_value::<_, _, #require_eq>(
+                        __rt::place_for_set_value::<_, _, #require_eq, #allow_hyphen_conf>(
                             &mut self.#ident,
                             #value_info,
                         )
                     },
                     FieldKind::OptionVec => match value_delimiter {
                         Some(ch) => quote_spanned! {effective_ty.span()=>
-                            __rt::place_for_vec_sep::<_, _, #require_eq, #ch>(
+                            __rt::place_for_vec_sep::<_, _, #require_eq, #ch, #allow_hyphen_conf>(
                                 &mut self.#ident,
                                 #value_info,
                             )
                         },
                         None => quote_spanned! {effective_ty.span()=>
-                            __rt::place_for_vec::<_, _, #require_eq>(
+                            __rt::place_for_vec::<_, _, #require_eq, #allow_hyphen_conf>(
                                 &mut self.#ident,
                                 #value_info,
                             )

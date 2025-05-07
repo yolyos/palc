@@ -118,6 +118,7 @@ pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
 
 /// A named argument with its place attached as `&mut self`.
 pub trait ArgPlace {
+    #[expect(private_interfaces, reason = "unused by macro")]
     fn num_values(&self) -> NumValues;
 
     // FIXME: Merge these functions?
@@ -131,9 +132,27 @@ pub trait ArgPlace {
 
 /// The expected number of values for a named argument to take.
 #[derive(Debug, Clone, Copy)]
-pub enum NumValues {
+enum NumValues {
     Zero,
-    One { require_equals: bool },
+    One { require_equals: bool, accept_hyphen: AcceptHyphen },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AcceptHyphen {
+    No,
+    OnlyNumber,
+    Yes,
+}
+
+// Workaround: enums are not allowed in const generics, we use `u8` to pass it from proc-macro.
+impl From<u8> for AcceptHyphen {
+    fn from(v: u8) -> Self {
+        match v {
+            0 => Self::No,
+            1 => Self::OnlyNumber,
+            _ => Self::Yes,
+        }
+    }
 }
 
 #[inline(always)]
@@ -178,17 +197,22 @@ pub fn place_for_counter(place: &mut Option<u8>) -> &mut dyn ArgPlace {
     Place::ref_cast_mut(place)
 }
 
-pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
+pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const ACCEPT_HYPHEN: u8>(
     place: &mut Option<Vec<T>>,
     _: A,
 ) -> &mut dyn ArgPlace {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A, const REQUIRE_EQ: bool>(Option<Vec<T>>, PhantomData<A>);
+    struct Place<T, A, const REQUIRE_EQ: bool, const ACCEPT_HYPHEN: u8>(
+        Option<Vec<T>>,
+        PhantomData<A>,
+    );
 
-    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool> ArgPlace for Place<T, A, REQUIRE_EQ> {
+    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const ACCEPT_HYPHEN: u8> ArgPlace
+        for Place<T, A, REQUIRE_EQ, ACCEPT_HYPHEN>
+    {
         fn num_values(&self) -> NumValues {
-            NumValues::One { require_equals: REQUIRE_EQ }
+            NumValues::One { require_equals: REQUIRE_EQ, accept_hyphen: ACCEPT_HYPHEN.into() }
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
@@ -197,25 +221,36 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
         }
     }
 
-    Place::<T, A, REQUIRE_EQ>::ref_cast_mut(place)
+    Place::<T, A, REQUIRE_EQ, ACCEPT_HYPHEN>::ref_cast_mut(place)
 }
 
-pub fn place_for_vec_sep<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DELIMITER: char>(
+pub fn place_for_vec_sep<
+    T,
+    A: ArgValueInfo<T>,
+    const REQUIRE_EQ: bool,
+    const DELIMITER: char,
+    const ACCEPT_HYPHEN: u8,
+>(
     place: &mut Option<Vec<T>>,
     _: A,
 ) -> &'_ mut dyn ArgPlace {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A, const REQUIRE_EQ: bool, const DELIMITER: char>(
+    struct Place<T, A, const REQUIRE_EQ: bool, const DELIMITER: char, const ACCEPT_HYPHEN: u8>(
         Option<Vec<T>>,
         PhantomData<A>,
     );
 
-    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DELIMITER: char> ArgPlace
-        for Place<T, A, REQUIRE_EQ, DELIMITER>
+    impl<
+        T,
+        A: ArgValueInfo<T>,
+        const REQUIRE_EQ: bool,
+        const DELIMITER: char,
+        const ACCEPT_HYPHEN: u8,
+    > ArgPlace for Place<T, A, REQUIRE_EQ, DELIMITER, ACCEPT_HYPHEN>
     {
         fn num_values(&self) -> NumValues {
-            NumValues::One { require_equals: REQUIRE_EQ }
+            NumValues::One { require_equals: REQUIRE_EQ, accept_hyphen: ACCEPT_HYPHEN.into() }
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
@@ -228,20 +263,27 @@ pub fn place_for_vec_sep<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const DE
         }
     }
 
-    Place::<T, A, REQUIRE_EQ, DELIMITER>::ref_cast_mut(place)
+    Place::<T, A, REQUIRE_EQ, DELIMITER, ACCEPT_HYPHEN>::ref_cast_mut(place)
 }
 
-pub fn place_for_set_value<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
+pub fn place_for_set_value<
+    T,
+    A: ArgValueInfo<T>,
+    const REQUIRE_EQ: bool,
+    const ACCEPT_HYPHEN: u8,
+>(
     place: &mut Option<T>,
     _: A,
 ) -> &'_ mut dyn ArgPlace {
     #[derive(RefCast)]
     #[repr(transparent)]
-    struct Place<T, A, const REQUIRE_EQ: bool>(Option<T>, PhantomData<A>);
+    struct Place<T, A, const REQUIRE_EQ: bool, const ACCEPT_HYPHEN: u8>(Option<T>, PhantomData<A>);
 
-    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool> ArgPlace for Place<T, A, REQUIRE_EQ> {
+    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const ACCEPT_HYPHEN: u8> ArgPlace
+        for Place<T, A, REQUIRE_EQ, ACCEPT_HYPHEN>
+    {
         fn num_values(&self) -> NumValues {
-            NumValues::One { require_equals: REQUIRE_EQ }
+            NumValues::One { require_equals: REQUIRE_EQ, accept_hyphen: ACCEPT_HYPHEN.into() }
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
@@ -253,7 +295,7 @@ pub fn place_for_set_value<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool>(
         }
     }
 
-    Place::<T, A, REQUIRE_EQ>::ref_cast_mut(place)
+    Place::<T, A, REQUIRE_EQ, ACCEPT_HYPHEN>::ref_cast_mut(place)
 }
 
 pub type GlobalAncestors<'a> = &'a mut dyn GlobalChain;
@@ -411,6 +453,12 @@ pub trait ParserStateDyn: 'static {
         let _ = (arg, idx, is_last);
         Err(None)
     }
+
+    /// If unknown hyphen-started arguments should be treated as unnamed arguments?
+    /// Return as `AcceptHyphen as u8`.
+    fn unnamed_arg_accept_hyphen(&self) -> u8 {
+        0
+    }
 }
 
 /// No-op state for unit structs or unit variants.
@@ -485,6 +533,8 @@ pub fn try_parse_with_state(
     args: &mut ArgsIter<'_>,
     global: GlobalAncestors<'_>,
 ) -> Result<()> {
+    let named_arg_fallback = AcceptHyphen::from(state.unnamed_arg_accept_hyphen());
+
     let mut idx = 0usize;
     let mut buf = OsString::new();
     while let Some(arg) = args.next_arg(&mut buf)? {
@@ -509,6 +559,10 @@ pub fn try_parse_with_state(
                     ControlFlow::Continue(()) => match global.search_global_named(enc_name) {
                         ControlFlow::Break(place) => place,
                         ControlFlow::Continue(()) => {
+                            if named_arg_fallback != AcceptHyphen::No {
+                                todo!()
+                            }
+
                             // TODO: Configurable help?
                             #[cfg(feature = "help")]
                             if enc_name == "h" || enc_name == "help" {
@@ -538,7 +592,7 @@ pub fn try_parse_with_state(
                         }
                         place.feed_none()
                     }
-                    NumValues::One { require_equals } => {
+                    NumValues::One { require_equals, accept_hyphen } => {
                         if require_equals && !has_eq {
                             return Err(ErrorKind::MissingEq.with_arg(enc_name));
                         }
@@ -546,7 +600,7 @@ pub fn try_parse_with_state(
                             args.discard_short_args();
                             place.feed(Cow::Borrowed(v))
                         } else {
-                            let v = args.next_value(enc_name)?;
+                            let v = args.next_value(enc_name, accept_hyphen)?;
                             place.feed(Cow::Owned(v))
                         }
                     }
@@ -665,12 +719,21 @@ impl<'a> ArgsIter<'a> {
         self.next_short_idx = None;
     }
 
-    fn next_value(&mut self, enc_name: &str) -> Result<OsString> {
+    fn next_value(&mut self, enc_name: &str, hyphen: AcceptHyphen) -> Result<OsString> {
         assert!(self.next_short_idx.is_none());
         self.iter
             .next()
-            // TODO: allow_hyphen.
-            .filter(|raw| raw == "-" || !raw.starts_with('='))
+            .filter(|raw| {
+                let raw = raw.as_encoded_bytes();
+                if raw == b"-" || !raw.starts_with(b"-") {
+                    return true;
+                }
+                match hyphen {
+                    AcceptHyphen::Yes => true,
+                    AcceptHyphen::OnlyNumber if raw[1..].iter().all(|b| b.is_ascii_digit()) => true,
+                    _ => false,
+                }
+            })
             .ok_or_else(|| ErrorKind::MissingValue.with_arg(enc_name))
     }
 }

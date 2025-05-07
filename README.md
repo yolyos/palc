@@ -35,7 +35,7 @@ Though some of clap features are not-yet-implemented.
     - [x] '='-separator `--long=v` `-f=v`.
     - [x] Aliases.
     - [x] Reject hyphen values.
-    - [ ] Allow hyphen values.
+    - [x] Allow hyphen values.
     - [ ] Space-delimited multi-values.
     - [x] Custom-delimited multi-values.
     - [ ] Multi-values with value-terminator.
@@ -43,6 +43,7 @@ Though some of clap features are not-yet-implemented.
     - [x] Force no named arguments `--`.
     - [x] Greedy/tail arguments (`arg(trailing_var_arg)`).
     - [x] Last arguments after `--` (`arg(last)`).
+    - [ ] Allow hyphen values.
   - [x] Counting number of occurrence.
   - [ ] Custom ArgAction.
   - [ ] Custom number of values (`arg(num_values)`).

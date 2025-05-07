@@ -32,7 +32,7 @@ pub mod __private {
     pub use std::ffi::{OsStr, OsString};
     pub use std::marker::PhantomData;
     pub use std::str::from_utf8;
-    pub use {Default, Err, Fn, Iterator, None, Ok, Option, Some, Vec, bool, char, str, usize};
+    pub use {Default, Err, Fn, Iterator, None, Ok, Option, Some, Vec, bool, char, str, u8, usize};
 
     pub use crate::runtime::*;
 
