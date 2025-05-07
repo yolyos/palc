@@ -5,7 +5,6 @@ shift
 flags=(
     --release
     --no-default-features
-    --features __test-allow-unknown-fields
 )
 
 # Exclude outline-able std staticlib functions.

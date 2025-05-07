@@ -12,9 +12,6 @@ keywords.workspace = true
 [lib]
 proc-macro = true
 
-[features]
-__test-allow-unknown-fields = []
-
 [dependencies]
 heck = "0.5.0"
 proc-macro2 = "1.0.94"

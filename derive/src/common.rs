@@ -318,12 +318,6 @@ impl ArgMeta {
         } else if path.is_ident("conflicts_with_all") {
             self.conflicts_with.extend(meta.value()?.parse::<OneOrArray<FieldPath>>()?);
         } else {
-            if cfg!(feature = "__test-allow-unknown-fields") {
-                if meta.input.peek(Token![=]) {
-                    meta.value()?.parse::<syn::Expr>()?;
-                }
-                return Ok(());
-            }
             ensure!(false, "unknown attribute");
         }
         Ok(())
@@ -424,12 +418,6 @@ impl CommandMeta {
                 because line-wrapping's drawback outweighs its benefits.",
             ));
         } else {
-            if cfg!(feature = "__test-allow-unknown-fields") {
-                if meta.input.peek(Token![=]) {
-                    meta.value()?.parse::<syn::Expr>()?;
-                }
-                return Ok(());
-            }
             return Err(syn::Error::new(path.span(), "unknown attribute"));
         }
 

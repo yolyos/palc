@@ -24,8 +24,6 @@ default = ["derive", "help"]
 help = []
 derive = ["dep:palc-derive"]
 
-__test-allow-unknown-fields = ["palc-derive/__test-allow-unknown-fields"]
-
 [dependencies]
 os_str_bytes = { version = "7.1.0", default-features = false, features = ["raw_os_str"] }
 ref-cast = "1.0.24"
@@ -34,10 +32,6 @@ ref-cast = "1.0.24"
 path = "./derive"
 version = "0.0.1"
 optional = true
-
-[[example]]
-name = "deno-palc"
-required-features = ["__test-allow-unknown-fields"]
 
 [dev-dependencies]
 argh = { version = "0.1.13", default-features = false }

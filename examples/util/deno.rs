@@ -440,11 +440,9 @@ struct RunSubcommand {
     // NOTE: these defaults are provided
     // so `deno run --v8-flags=--help` works
     // without specifying file to run.
+    // TODO: default_value_ifs = [("v8-flags", "--help", "_"), ("v8-flags", "-help", "_")]
     /// Script arg
-    #[arg(required = true, value_name = "SCRIPT_ARG", default_value_ifs = [
-    ("v8-flags", "--help", "_"),
-    ("v8-flags", "-help", "_"),
-  ])]
+    #[arg(required = true, value_name = "SCRIPT_ARG")]
     script_arg: Vec<String>,
 
     // duplicate arg: conflicts
