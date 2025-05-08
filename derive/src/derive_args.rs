@@ -617,7 +617,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     field_inits.push(quote! { __rt::None });
                 }
             }
-            field_finishes.push(quote! { self.#ident #finish });
+            field_finishes.push(quote! { self.#ident.take() #finish });
         }
         if let Some(SubcommandInfo { ident, effective_ty, optional }) = self.subcommand {
             field_names.push(ident);
@@ -628,20 +628,20 @@ impl ToTokens for ParserStateDefImpl<'_> {
             } else {
                 quote! { .unwrap() }
             };
-            field_finishes.push(quote! { self.#ident #tail });
+            field_finishes.push(quote! { self.#ident.take() #tail });
         }
         if let Some(CatchallFieldInfo { field_idx, .. }) = self.catchall_field {
             let FieldInfo { ident, effective_ty, finish, .. } = &fields[field_idx];
             field_names.push(*ident);
             field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
             field_inits.push(quote! { __rt::None });
-            field_finishes.push(quote! { self.#ident #finish });
+            field_finishes.push(quote! { self.#ident.take() #finish });
         }
         for &FlattenFieldInfo { ident, effective_ty } in &self.flatten_fields {
             field_names.push(ident);
             field_tys.push(quote! { <#effective_ty as __rt::Args>::__State });
             field_inits.push(quote! { __rt::ParserState::init() });
-            field_finishes.push(quote! { __rt::ParserState::finish(self.#ident)? });
+            field_finishes.push(quote! { __rt::ParserState::finish(&mut self.#ident)? });
         }
 
         let feed_named_func = FeedNamedImpl(self);
@@ -681,7 +681,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     }
                 }
 
-                fn finish(self) -> __rt::Result<Self::Output> {
+                fn finish(&mut self) -> __rt::Result<Self::Output> {
                     #validation
                     __rt::Ok(#output_ctor {
                         #(#field_names : #field_finishes,)*

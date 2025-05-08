@@ -87,8 +87,8 @@ impl<T: 'static> ParserState for FallbackState<T> {
     fn init() -> Self {
         unimplemented!()
     }
-    fn finish(self) -> Result<Self::Output> {
-        match self {}
+    fn finish(&mut self) -> Result<Self::Output> {
+        match self.0 {}
     }
 }
 impl<T: 'static> ParserStateDyn for FallbackState<T> {}
@@ -407,7 +407,7 @@ pub trait ParserState: ParserStateDyn {
     const TOTAL_UNNAMED_ARG_CNT: usize;
 
     fn init() -> Self;
-    fn finish(self) -> Result<Self::Output>;
+    fn finish(&mut self) -> Result<Self::Output>;
 
     // The is only called via `GlobalChain::search_global_named` thus do not need to be in vtable.
     fn feed_global_named(&mut self, _name: &str) -> FeedNamed<'_> {
@@ -472,7 +472,10 @@ impl ParserState for () {
 
     fn init() -> Self {}
 
-    fn finish(self) -> Result<Self::Output> {
+    // Semantically this takes the ownership of `self`, but using `&mut self`
+    // can eliminate partial drop codegen and call the default drop impl.
+    // It gives a much better codegen.
+    fn finish(&mut self) -> Result<Self::Output> {
         Ok(())
     }
 }
