@@ -152,7 +152,7 @@ struct FieldInfo<'i> {
     accept_hyphen: AcceptHyphen,
 
     // Validations //
-    not_none: bool,
+    noneness: Noneness,
     exclusive: bool,
     dependencies: Vec<FieldPath>,
     conflicts: Vec<FieldPath>,
@@ -165,6 +165,12 @@ struct FieldInfo<'i> {
     value_display: LitStr,
     doc: Doc,
     hide: bool,
+}
+
+enum Noneness {
+    Optional,
+    Required,
+    DefaultExpr(TokenStream),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -212,10 +218,10 @@ fn value_parsed(ty: &syn::Type) -> TokenStream {
     }
 }
 
+#[derive(PartialEq)]
 enum FieldFinish {
     Id,
     UnwrapDefault,
-    UnwrapOrExpr(TokenStream),
     UnwrapChecked,
 }
 
@@ -224,7 +230,6 @@ impl ToTokens for FieldFinish {
         match self {
             Self::Id => {}
             Self::UnwrapDefault => tokens.extend(quote! { .unwrap_or_default() }),
-            Self::UnwrapOrExpr(expr) => tokens.extend(quote! { .unwrap_or_else(|| #expr) }),
             Self::UnwrapChecked => tokens.extend(quote! { .unwrap() }),
         }
     }
@@ -346,7 +351,7 @@ pub fn expand_state_def_impl<'i>(
 
         let ty_kind = ArgTyKind::of(&field.ty);
         #[rustfmt::skip]
-        let (kind, effective_ty, mut finish) = match ty_kind {
+        let (kind, effective_ty, finish) = match ty_kind {
             ArgTyKind::Bool => (FieldKind::BoolSetTrue, &field.ty, FieldFinish::UnwrapDefault),
             ArgTyKind::U8 => (FieldKind::Counter, &field.ty, FieldFinish::UnwrapDefault),
             ArgTyKind::Vec(subty) => (FieldKind::OptionVec, subty, FieldFinish::UnwrapDefault),
@@ -356,32 +361,44 @@ pub fn expand_state_def_impl<'i>(
         };
 
         // Default values.
-        if let Some(preparse_default) = arg.default_value.take() {
-            if arg.default_value_t.is_some() {
-                errs.push(syn::Error::new(
-                    field.ty.span(),
-                    "arg(default_value_t) conflicts with arg(default_value)",
-                ));
+        let default_expr = match (arg.default_value_t.take(), arg.default_value.take()) {
+            (Some(Override::Inherit), None) => Some(quote_spanned! {field.ty.span()=>
+                __rt::Default::default()
+            }),
+            (Some(Override::Explicit(e)), None) => Some(e.into_token_stream()),
+            (None, Some(default_str)) => {
+                let value_info = value_info(effective_ty);
+                Some(quote_spanned! {field.ty.span()=>
+                    __rt::parse_default_str(#default_str, #value_info)?
+                })
             }
-
-            let value_info = value_info(effective_ty);
-            finish = FieldFinish::UnwrapOrExpr(quote_spanned! {field.ty.span()=>
-                __rt::ArgValueInfo::parse_str(#value_info, #preparse_default).expect("cannot parse default value")
-            });
-        } else if let Some(default) = arg.default_value_t.take() {
-            // TODO: Support bool?
-            if matches!(ty_kind, ArgTyKind::Vec(_) | ArgTyKind::Other) {
-                finish = match default {
-                    Override::Inherit => FieldFinish::UnwrapDefault,
-                    Override::Explicit(expr) => FieldFinish::UnwrapOrExpr(expr.into()),
+            (None, None) => None,
+            (Some(_), Some(tt)) => {
+                errs.push(syn::Error::new(
+                    tt.span(),
+                    "arg(default_value) conflicts with arg(default_value_t)",
+                ));
+                None
+            }
+        };
+        let noneness = match default_expr {
+            Some(e) => {
+                if arg.required {
+                    errs.push(Error::new(
+                        ident.span(),
+                        "arg(required) conflicts with arg(default_value{,_t})",
+                    ));
                 }
-            } else {
-                errs.push(syn::Error::new(
-                    field.ty.span(),
-                    "unsupported type for arg(default_value_t)",
-                ));
+                Noneness::DefaultExpr(e)
             }
-        }
+            None => {
+                if arg.required || finish == FieldFinish::UnwrapChecked {
+                    Noneness::Required
+                } else {
+                    Noneness::Optional
+                }
+            }
+        };
 
         if let Some(ch) = &arg.value_delimiter {
             if !matches!(kind, FieldKind::OptionVec) {
@@ -414,8 +431,6 @@ pub fn expand_state_def_impl<'i>(
                 "Only arguments that take values can allow hyphen values",
             ));
         }
-
-        let not_none = arg.required || matches!(finish, FieldFinish::UnwrapChecked);
 
         let value_display = match &arg.value_name {
             Some(s) => s.clone(),
@@ -497,7 +512,7 @@ pub fn expand_state_def_impl<'i>(
                 global: arg.global,
                 value_delimiter: arg.value_delimiter,
                 accept_hyphen,
-                not_none,
+                noneness,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
@@ -538,7 +553,7 @@ pub fn expand_state_def_impl<'i>(
                 global: false,
                 value_delimiter: arg.value_delimiter,
                 accept_hyphen,
-                not_none,
+                noneness,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
@@ -946,7 +961,7 @@ impl ToTokens for ValidationImpl<'_> {
 
         for f @ FieldInfo { ident, name_display, .. } in &def.fields {
             let name_display = name_display.as_deref().unwrap_or_default();
-            if f.not_none {
+            if matches!(f.noneness, Noneness::Required) {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
                         return __rt::missing_required_arg(#name_display)
@@ -994,6 +1009,17 @@ impl ToTokens for ValidationImpl<'_> {
                     return __rt::missing_required_subcmd()
                 }
             });
+        }
+
+        // Set default values after checks.
+        for FieldInfo { ident, noneness, .. } in &def.fields {
+            if let Noneness::DefaultExpr(e) = noneness {
+                tokens.extend(quote! {
+                    if self.#ident.is_none() {
+                        self.#ident = __rt::Some(#e);
+                    }
+                });
+            }
         }
     }
 }

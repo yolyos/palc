@@ -549,6 +549,13 @@ impl ToTokens for VerbatimExpr {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.0.to_tokens(tokens);
     }
+
+    fn into_token_stream(self) -> TokenStream
+    where
+        Self: Sized,
+    {
+        self.0
+    }
 }
 
 /// Collect doc-comments into a single string.

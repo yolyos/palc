@@ -170,6 +170,24 @@ fn optional() {
 }
 
 #[test]
+fn default_values() {
+    #[derive(Debug, Clone, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(short = 'O', default_value_t)]
+        opt: i32,
+        #[arg(long, default_value = "none", conflicts_with = "opt")]
+        debug: String,
+    }
+
+    // Constraints are validated before default values.
+    check([""], &Cli { opt: 0, debug: "none".into() });
+    check(["", "-O2"], &Cli { opt: 2, debug: "none".into() });
+    check(["", "--debug=full"], &Cli { opt: 0, debug: "full".into() });
+
+    check_err::<Cli>(["", "-O2", "--debug="], expect!["TODO: constraint failed"]);
+}
+
+#[test]
 fn counter() {
     #[derive(Debug, Clone, Default, PartialEq, Parser)]
     struct Cli {

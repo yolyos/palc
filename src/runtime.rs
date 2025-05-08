@@ -93,6 +93,11 @@ impl<T: 'static> ParserState for FallbackState<T> {
 }
 impl<T: 'static> ParserStateDyn for FallbackState<T> {}
 
+// TODO: Invalid default strings are only caught at runtime, which is not ideal.
+pub fn parse_default_str<T, A: ArgValueInfo<T>>(s: &str, _: A) -> Result<T> {
+    A::parser()(Cow::Borrowed(s.as_ref()))
+}
+
 // TODO: Check inlining behavior is expected.
 pub fn unknown_subcommand<T>(name: &OsStr) -> Result<T> {
     Err(ErrorKind::UnknownSubcommand.with_input(name.into()))
