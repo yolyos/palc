@@ -1,8 +1,9 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::str::FromStr;
 
+use crate::error::DynStdError;
 use crate::{ErrorKind, Result};
 
 mod sealed {
@@ -58,30 +59,31 @@ impl<T: ValueEnum> InferValueParser<T, &&&&()> {
     }
 }
 
-impl<T: From<OsString>> InferValueParser<T, &&&()> {
+impl<T: for<'a> TryFrom<&'a OsStr, Error: Into<DynStdError>>> InferValueParser<T, &&&()> {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
         impl sealed::Sealed for Info {}
-        impl<T: From<OsString>> ArgValueInfo<T> for Info {
+        impl<T: for<'a> TryFrom<&'a OsStr, Error: Into<DynStdError>>> ArgValueInfo<T> for Info {
             fn parse(v: &OsStr) -> Result<T> {
-                Ok(v.to_owned().into())
+                T::try_from(v).map_err(|err| {
+                    ErrorKind::InvalidValue.with_input(v.into()).with_source(err.into())
+                })
             }
         }
         Info
     }
 }
 
-// TODO: TryFrom.
-impl<T: From<String>> InferValueParser<T, &&()> {
+impl<T: for<'a> TryFrom<&'a str, Error: Into<DynStdError>>> InferValueParser<T, &&()> {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
         impl sealed::Sealed for Info {}
-        impl<T: From<String>> ArgValueInfo<T> for Info {
+        impl<T: for<'a> TryFrom<&'a str, Error: Into<DynStdError>>> ArgValueInfo<T> for Info {
             fn parse(v: &OsStr) -> Result<T> {
-                Ok(v.to_owned()
-                    .into_string()
-                    .map_err(|e| ErrorKind::InvalidUtf8.with_input(e))?
-                    .into())
+                let v = v.to_str().ok_or_else(|| ErrorKind::InvalidUtf8.with_input(v.into()))?;
+                T::try_from(v).map_err(|err| {
+                    ErrorKind::InvalidValue.with_input(v.into()).with_source(err.into())
+                })
             }
         }
         Info
@@ -90,9 +92,7 @@ impl<T: From<String>> InferValueParser<T, &&()> {
 
 impl<T> InferValueParser<T, &()>
 where
-    // This implies either `T::Err` impls `std::error::Error` or it is string-like.
-    // Note that `&str: !std::error::Error`.
-    T: FromStr<Err: Into<Box<dyn std::error::Error + Send + Sync + 'static>>>,
+    T: FromStr<Err: Into<DynStdError>>,
 {
     pub fn get(&self) -> impl ArgValueInfo<T> {
         struct Info;
@@ -124,6 +124,7 @@ impl<T> InferValueParser<T, ()> {
 
 #[test]
 fn native_impls() {
+    use std::ffi::OsString;
     use std::path::PathBuf;
 
     fn has_parser<T>(_: impl ArgValueInfo<T>) {}

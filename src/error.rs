@@ -3,7 +3,11 @@ use std::fmt;
 
 use crate::runtime::CommandInternal;
 
-type DynStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
+/// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
+/// This implies either `UserErr: std::error::Error` or it is string-like.
+///
+/// Note that `&str: !std::error::Error` so we cannot just use `UserErr: std::error::Err`.
+pub(crate) type DynStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub struct Error(Box<Inner>);
 
