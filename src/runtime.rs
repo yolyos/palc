@@ -300,6 +300,41 @@ pub fn place_for_set_value<
     Place::<T, A, REQUIRE_EQ, ACCEPT_HYPHEN>::ref_cast_mut(place)
 }
 
+pub fn place_for_set_opt_value<
+    T,
+    A: ArgValueInfo<T>,
+    const REQUIRE_EQ: bool,
+    const ACCEPT_HYPHEN: u8,
+>(
+    place: &mut Option<Option<T>>,
+    _: A,
+) -> &'_ mut dyn ArgPlace {
+    #[derive(RefCast)]
+    #[repr(transparent)]
+    struct Place<T, A, const REQUIRE_EQ: bool, const ACCEPT_HYPHEN: u8>(
+        Option<Option<T>>,
+        PhantomData<A>,
+    );
+
+    impl<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const ACCEPT_HYPHEN: u8> ArgPlace
+        for Place<T, A, REQUIRE_EQ, ACCEPT_HYPHEN>
+    {
+        fn num_values(&self) -> NumValues {
+            NumValues::One { require_equals: REQUIRE_EQ, accept_hyphen: ACCEPT_HYPHEN.into() }
+        }
+
+        fn feed(&mut self, value: &OsStr) -> Result<(), Error> {
+            if self.0.is_some() {
+                return Err(ErrorKind::DuplicatedNamedArgument.into());
+            }
+            self.0 = Some((!value.is_empty()).then(|| A::parse(value)).transpose()?);
+            Ok(())
+        }
+    }
+
+    Place::<T, A, REQUIRE_EQ, ACCEPT_HYPHEN>::ref_cast_mut(place)
+}
+
 pub type GlobalAncestors<'a> = &'a mut dyn GlobalChain;
 
 /// The singly linked list for states of ancestor subcommands that accept any global arguments.

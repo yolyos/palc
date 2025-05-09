@@ -170,6 +170,21 @@ fn optional() {
 }
 
 #[test]
+fn option_option() {
+    #[derive(Debug, Clone, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(long)]
+        foo: Option<String>,
+        #[arg(long)]
+        bar: Option<Option<String>>,
+    }
+
+    check([""], &Cli { foo: None, bar: None });
+    check(["", "--foo=", "--bar="], &Cli { foo: Some("".into()), bar: Some(None) });
+    check(["", "--foo=a", "--bar=b"], &Cli { foo: Some("a".into()), bar: Some(Some("b".into())) });
+}
+
+#[test]
 fn default_values() {
     #[derive(Debug, Clone, Default, PartialEq, Parser)]
     struct Cli {

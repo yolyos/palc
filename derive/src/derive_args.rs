@@ -178,6 +178,7 @@ enum FieldKind {
     BoolSetTrue,
     Counter,
     Option,
+    OptionOption,
     OptionVec,
 }
 
@@ -355,6 +356,7 @@ pub fn expand_state_def_impl<'i>(
             ArgTyKind::Vec(subty) => (FieldKind::OptionVec, subty, FieldFinish::UnwrapDefault),
             ArgTyKind::OptionVec(subty) => (FieldKind::OptionVec, subty, FieldFinish::Id),
             ArgTyKind::Option(subty) => (FieldKind::Option, subty, FieldFinish::Id),
+            ArgTyKind::OptionOption(subty) => (FieldKind::OptionOption, subty, FieldFinish::Id),
             ArgTyKind::Other => (FieldKind::Option, &field.ty, FieldFinish::UnwrapChecked),
         };
 
@@ -625,6 +627,10 @@ impl ToTokens for ParserStateDefImpl<'_> {
                     field_tys.push(quote! { __rt::Option<#effective_ty> });
                     field_inits.push(quote! { __rt::None });
                 }
+                FieldKind::OptionOption => {
+                    field_tys.push(quote! { __rt::Option<__rt::Option<#effective_ty>> });
+                    field_inits.push(quote! { __rt::None });
+                }
                 FieldKind::OptionVec => {
                     field_tys.push(quote! { __rt::Option<__rt::Vec<#effective_ty>> });
                     field_inits.push(quote! { __rt::None });
@@ -753,6 +759,12 @@ impl ToTokens for FeedNamedImpl<'_> {
                     }
                     FieldKind::Option => quote_spanned! {effective_ty.span()=>
                         __rt::place_for_set_value::<_, _, #require_eq, #allow_hyphen_conf>(
+                            &mut self.#ident,
+                            #value_info,
+                        )
+                    },
+                    FieldKind::OptionOption => quote_spanned! {effective_ty.span()=>
+                        __rt::place_for_set_opt_value::<_, _, #require_eq, #allow_hyphen_conf>(
                             &mut self.#ident,
                             #value_info,
                         )
@@ -1041,7 +1053,7 @@ impl ToTokens for RawArgsInfo<'_> {
             buf.push('\n');
             match f.kind {
                 FieldKind::BoolSetTrue | FieldKind::Counter => {}
-                FieldKind::Option | FieldKind::OptionVec => {
+                FieldKind::Option | FieldKind::OptionOption | FieldKind::OptionVec => {
                     buf.push_str(&f.value_display.value());
                     buf.push('\t');
                 }

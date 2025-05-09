@@ -96,8 +96,10 @@ pub enum ArgTyKind<'a> {
     Bool,
     U8,
     Option(&'a Type),
+    OptionOption(&'a Type),
     Vec(&'a Type),
     OptionVec(&'a Type),
+    // TODO: VecVec, OptionVecVec
     Other,
 }
 
@@ -115,6 +117,9 @@ impl ArgTyKind<'_> {
             _ => {}
         }
         if let Some(subty) = strip_ty_ctor(ty, TY_OPTION) {
+            if let Some(subty) = strip_ty_ctor(subty, TY_OPTION) {
+                return ArgTyKind::OptionOption(subty);
+            }
             if let Some(subty) = strip_ty_ctor(subty, TY_VEC) {
                 return ArgTyKind::OptionVec(subty);
             }
