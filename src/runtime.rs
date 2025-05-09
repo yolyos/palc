@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::convert::Infallible;
 use std::ffi::{OsStr, OsString};
 use std::marker::PhantomData;
@@ -95,11 +94,11 @@ impl<T: 'static> ParserStateDyn for FallbackState<T> {}
 
 // TODO: Invalid default strings are only caught at runtime, which is not ideal.
 pub fn parse_default_str<T, A: ArgValueInfo<T>>(s: &str, _: A) -> Result<T> {
-    A::parse(Cow::Borrowed(s.as_ref()))
+    A::parse(s.as_ref())
 }
 
 pub fn parse_take_arg<T, A: ArgValueInfo<T>>(s: &mut OsString, _: A) -> Result<T> {
-    A::parse(Cow::Owned(std::mem::take(s)))
+    A::parse(s)
 }
 
 // TODO: Check inlining behavior is expected.
@@ -126,7 +125,7 @@ pub trait ArgPlace {
     fn num_values(&self) -> NumValues;
 
     // FIXME: Merge these functions?
-    fn feed(&mut self, _value: Cow<'_, OsStr>) -> Result<(), Error> {
+    fn feed(&mut self, _value: &OsStr) -> Result<(), Error> {
         unreachable!()
     }
     fn feed_none(&mut self) -> Result<(), Error> {
@@ -219,7 +218,7 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const ACCEPT
             NumValues::One { require_equals: REQUIRE_EQ, accept_hyphen: ACCEPT_HYPHEN.into() }
         }
 
-        fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
+        fn feed(&mut self, value: &OsStr) -> Result<(), Error> {
             self.0.get_or_insert_default().push(A::parse(value)?);
             Ok(())
         }
@@ -257,10 +256,10 @@ pub fn place_for_vec_sep<
             NumValues::One { require_equals: REQUIRE_EQ, accept_hyphen: ACCEPT_HYPHEN.into() }
         }
 
-        fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
+        fn feed(&mut self, value: &OsStr) -> Result<(), Error> {
             let v = self.0.get_or_insert_default();
             for frag in value.split(DELIMITER) {
-                v.push(A::parse(Cow::Borrowed(frag))?);
+                v.push(A::parse(frag)?);
             }
             Ok(())
         }
@@ -289,7 +288,7 @@ pub fn place_for_set_value<
             NumValues::One { require_equals: REQUIRE_EQ, accept_hyphen: ACCEPT_HYPHEN.into() }
         }
 
-        fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
+        fn feed(&mut self, value: &OsStr) -> Result<(), Error> {
             if self.0.is_some() {
                 return Err(ErrorKind::DuplicatedNamedArgument.into());
             }
@@ -355,7 +354,7 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
                 v.reserve(1 + high);
             }
             loop {
-                v.push(A::parse(Cow::Owned(arg))?);
+                v.push(A::parse(&arg)?);
                 arg = match args.iter.next() {
                     Some(arg) => arg,
                     None => return Ok(()),
@@ -600,10 +599,10 @@ pub fn try_parse_with_state(
                             Err(ErrorKind::MissingEq.into())
                         } else if let Some(v) = value {
                             args.discard_short_args();
-                            place.feed(Cow::Borrowed(v))
+                            place.feed(v)
                         } else {
                             let v = args.next_value(enc_name, accept_hyphen)?;
-                            place.feed(Cow::Owned(v))
+                            place.feed(&v)
                         }
                     }
                 }

@@ -27,7 +27,6 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 // ```
 #[doc(hidden)]
 pub mod __private {
-    pub use std::borrow::Cow;
     pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
     pub use std::marker::PhantomData;

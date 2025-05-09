@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::ffi::{OsStr, OsString};
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -18,7 +17,7 @@ mod sealed {
     to make it parseable"
 )]
 pub trait ArgValueInfo<T>: 'static + Sized + sealed::Sealed {
-    fn parse(v: Cow<'_, OsStr>) -> Result<T>;
+    fn parse(v: &OsStr) -> Result<T>;
 }
 
 pub trait ValueEnum: Sized {
@@ -47,12 +46,12 @@ impl<T: ValueEnum> InferValueParser<T, &&&&()> {
         struct Info;
         impl sealed::Sealed for Info {}
         impl<T: ValueEnum> ArgValueInfo<T> for Info {
-            fn parse(v: Cow<'_, OsStr>) -> Result<T> {
+            fn parse(v: &OsStr) -> Result<T> {
                 // TODO: better diagnostics?
                 v.to_str()
                     .ok_or(ErrorKind::InvalidUtf8)
                     .and_then(|s| T::parse_value(s).ok_or(ErrorKind::InvalidValue))
-                    .map_err(|err| err.with_input(v.into_owned()))
+                    .map_err(|err| err.with_input(v.to_owned()))
             }
         }
         Info
@@ -64,8 +63,8 @@ impl<T: From<OsString>> InferValueParser<T, &&&()> {
         struct Info;
         impl sealed::Sealed for Info {}
         impl<T: From<OsString>> ArgValueInfo<T> for Info {
-            fn parse(v: Cow<'_, OsStr>) -> Result<T> {
-                Ok(v.into_owned().into())
+            fn parse(v: &OsStr) -> Result<T> {
+                Ok(v.to_owned().into())
             }
         }
         Info
@@ -78,8 +77,8 @@ impl<T: From<String>> InferValueParser<T, &&()> {
         struct Info;
         impl sealed::Sealed for Info {}
         impl<T: From<String>> ArgValueInfo<T> for Info {
-            fn parse(v: Cow<'_, OsStr>) -> Result<T> {
-                Ok(v.into_owned()
+            fn parse(v: &OsStr) -> Result<T> {
+                Ok(v.to_owned()
                     .into_string()
                     .map_err(|e| ErrorKind::InvalidUtf8.with_input(e))?
                     .into())
@@ -102,10 +101,8 @@ where
         where
             T: FromStr<Err: Into<Box<dyn std::error::Error + Send + Sync + 'static>>>,
         {
-            fn parse(v: Cow<'_, OsStr>) -> Result<T> {
-                let s = v
-                    .to_str()
-                    .ok_or_else(|| ErrorKind::InvalidUtf8.with_input(v.clone().into()))?;
+            fn parse(v: &OsStr) -> Result<T> {
+                let s = v.to_str().ok_or_else(|| ErrorKind::InvalidUtf8.with_input(v.into()))?;
                 let t = s.parse::<T>().map_err(|err| {
                     ErrorKind::InvalidValue.with_input(s.into()).with_source(err.into())
                 })?;
