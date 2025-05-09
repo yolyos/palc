@@ -296,6 +296,8 @@ impl ArgMeta {
         } else if path.is_ident("value_delimiter") {
             check_dup!(value_delimiter);
             self.value_delimiter = Some(meta.value()?.parse::<syn::LitChar>()?);
+        } else if path.is_ident("value_enum") {
+            // Ignored.
         } else if path.is_ident("help") {
             check_dup!(help);
             self.help = Some(meta.value()?.parse::<LitStr>()?);

@@ -49,7 +49,12 @@ Though some of clap features are not-yet-implemented.
   - [ ] Custom number of values (`arg(num_values)`).
   - [ ] Overrides.
 
-  - [x] Default values, default pre-parsed values.
+  - [x] Default values. (`arg(default_value_t)`)
+    - [x] Default pre-parsed string value. (`arg(default_value)`)
+      - Note: The provided string value will be parsed at runtime if the
+        argument is missing. This will cause codegen degradation due to
+        panic handling, and typos cannot be caught statically.
+        Always use `arg(default_value_t)` if possible.
     - [ ] Default missing values.
     - [ ] Default from env.
 

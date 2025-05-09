@@ -31,7 +31,7 @@ pub struct Cli {
     filter: Vec<String>,
     /// Configure coloring of output. always = always colorize output, never = never colorize
     /// output, auto = colorize output if output is a tty and compiled for unix.
-    #[arg(short, long, alias = "colour", default_value = "auto")]
+    #[arg(short, long, alias = "colour", value_enum, default_value_t)]
     color: Color,
     /// Print additional statistical information.
     #[arg(short, long)]
@@ -58,7 +58,7 @@ pub struct Cli {
     #[arg(long, conflicts_with_all = ["test", "profile_time"])]
     list: bool,
     /// Output formatting
-    #[arg(long, default_value = "pretty")]
+    #[arg(long, value_enum, default_value_t)]
     format: Format,
     /// List or run ignored benchmarks (currently means skip all benchmarks)
     #[arg(long)]
@@ -83,7 +83,7 @@ pub struct Cli {
     #[arg(long, default_value_t = 5.0)]
     measurement_time: f64,
     /// Changes the default number of resamples for this run.
-    #[arg(long, default_value = "100000")]
+    #[arg(long, default_value_t = 100000.try_into().unwrap())]
     nresamples: NonZero<usize>,
     /// Changes the default noise threshold for this run.
     #[arg(long, default_value_t = 0.01)]
@@ -110,7 +110,7 @@ pub struct Cli {
     /// Change the CLI output format. By default, Criterion.rs will use its own format. If output
     /// format is set to 'bencher', Criterion.rs will print output in a format that resembles the
     /// 'bencher' crate.
-    #[arg(long, default_value = "criterion")]
+    #[arg(long, value_enum, default_value_t)]
     output_format: OutputFormat,
     /// Ignored, but added for compatibility with libtest.
     #[arg(long, hide = true)]
@@ -125,15 +125,17 @@ pub struct Cli {
     version: bool,
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Default, Clone, ValueEnum)]
 enum Color {
+    #[default]
     Auto,
     Always,
     Never,
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Default, Clone, ValueEnum)]
 enum Format {
+    #[default]
     Pretty,
     Terse,
 }
@@ -144,8 +146,9 @@ enum PlottingBackend {
     Plotters,
 }
 
-#[derive(Clone, ValueEnum)]
+#[derive(Default, Clone, ValueEnum)]
 enum OutputFormat {
+    #[default]
     Criterion,
     Test,
 }
