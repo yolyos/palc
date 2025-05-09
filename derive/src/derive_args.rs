@@ -213,9 +213,7 @@ fn value_info(ty: &syn::Type) -> TokenStream {
 
 fn value_parsed(ty: &syn::Type) -> TokenStream {
     let value_info = value_info(ty);
-    quote_spanned! {ty.span()=>
-        __rt::ArgValueInfo::parse(#value_info, __rt::take_arg(__arg))?
-    }
+    quote_spanned! {ty.span()=> __rt::parse_take_arg(__arg, #value_info)? }
 }
 
 #[derive(PartialEq)]

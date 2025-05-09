@@ -95,7 +95,11 @@ impl<T: 'static> ParserStateDyn for FallbackState<T> {}
 
 // TODO: Invalid default strings are only caught at runtime, which is not ideal.
 pub fn parse_default_str<T, A: ArgValueInfo<T>>(s: &str, _: A) -> Result<T> {
-    A::parser()(Cow::Borrowed(s.as_ref()))
+    A::parse(Cow::Borrowed(s.as_ref()))
+}
+
+pub fn parse_take_arg<T, A: ArgValueInfo<T>>(s: &mut OsString, _: A) -> Result<T> {
+    A::parse(Cow::Owned(std::mem::take(s)))
 }
 
 // TODO: Check inlining behavior is expected.
@@ -114,11 +118,6 @@ pub fn missing_required_subcmd<T>() -> Result<T> {
 // TODO: Detail errors.
 pub fn fail_constraint<T>(arg_display: &'static str) -> Result<T> {
     Err(ErrorKind::Constraint.with_arg_display(arg_display))
-}
-
-#[inline]
-pub fn take_arg(s: &mut OsString) -> Cow<'static, OsStr> {
-    Cow::Owned(std::mem::take(s))
 }
 
 /// A named argument with its place attached as `&mut self`.
@@ -221,7 +220,7 @@ pub fn place_for_vec<T, A: ArgValueInfo<T>, const REQUIRE_EQ: bool, const ACCEPT
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
-            self.0.get_or_insert_default().push(A::parser()(value)?);
+            self.0.get_or_insert_default().push(A::parse(value)?);
             Ok(())
         }
     }
@@ -259,10 +258,9 @@ pub fn place_for_vec_sep<
         }
 
         fn feed(&mut self, value: Cow<'_, OsStr>) -> Result<(), Error> {
-            let parser = A::parser();
             let v = self.0.get_or_insert_default();
             for frag in value.split(DELIMITER) {
-                v.push(parser(Cow::Borrowed(frag))?);
+                v.push(A::parse(Cow::Borrowed(frag))?);
             }
             Ok(())
         }
@@ -295,7 +293,7 @@ pub fn place_for_set_value<
             if self.0.is_some() {
                 return Err(ErrorKind::DuplicatedNamedArgument.into());
             }
-            self.0 = Some(A::parser()(value)?);
+            self.0 = Some(A::parse(value)?);
             Ok(())
         }
     }
@@ -356,9 +354,8 @@ pub fn place_for_trailing_var_arg<T, A: ArgValueInfo<T>>(
             if let Some(high) = args.iter.size_hint().1 {
                 v.reserve(1 + high);
             }
-            let parser = A::parser();
             loop {
-                v.push(parser(Cow::Owned(arg))?);
+                v.push(A::parse(Cow::Owned(arg))?);
                 arg = match args.iter.next() {
                     Some(arg) => arg,
                     None => return Ok(()),
