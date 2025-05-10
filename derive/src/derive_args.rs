@@ -148,7 +148,7 @@ struct FieldInfo<'i> {
     arg_name_matchee: Vec<LitStr>,
     require_eq: bool,
     global: bool,
-    value_delimiter: Option<syn::LitChar>,
+    value_delimiter: Option<char>,
     accept_hyphen: AcceptHyphen,
 
     // Validations //
@@ -400,15 +400,36 @@ pub fn expand_state_def_impl<'i>(
             }
         };
 
-        if let Some(ch) = &arg.value_delimiter {
+        let value_delimiter = if let Some(ch) = &arg.value_delimiter {
+            let chv = ch.value();
             if !matches!(kind, FieldKind::OptionVec) {
                 errs.push(syn::Error::new(
                     ch.span(),
                     "arg(value_delimiter) must be used on Vec-like types",
                 ));
-                arg.value_delimiter = None;
+                None
+            } else if !chv.is_ascii() || chv.is_ascii_control() {
+                errs.push(syn::Error::new(
+                    ch.span(),
+                    r#"arg(value_delimiter) must be non-control ASCII characters. \
+                    A unicode codepoint is not necessarity a "character" in human sense, thus \
+                    automatic splitting may give unexpected results. \
+                    If you do want this to be supported, convince us by opening an issue."#,
+                ));
+                None
+            } else if !arg.is_named() {
+                errs.push(syn::Error::new(
+                    ch.span(),
+                    "TODO: arg(value_delimiter) is not yet supported on unnamed arguments",
+                ));
+                None
+            } else {
+                Some(chv)
             }
-        }
+        } else {
+            None
+        };
+
         let accept_hyphen = match (arg.allow_hyphen_values, arg.allow_negative_numbers) {
             (true, false) => AcceptHyphen::Yes,
             (false, true) => AcceptHyphen::OnlyNumber,
@@ -510,7 +531,7 @@ pub fn expand_state_def_impl<'i>(
                 arg_name_matchee,
                 require_eq: arg.require_equals,
                 global: arg.global,
-                value_delimiter: arg.value_delimiter,
+                value_delimiter,
                 accept_hyphen,
                 noneness,
                 exclusive: arg.exclusive,
@@ -551,7 +572,7 @@ pub fn expand_state_def_impl<'i>(
                 arg_name_matchee: Vec::new(),
                 require_eq: false,
                 global: false,
-                value_delimiter: arg.value_delimiter,
+                value_delimiter,
                 accept_hyphen,
                 noneness,
                 exclusive: arg.exclusive,

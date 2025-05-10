@@ -442,6 +442,20 @@ fn trailing_args() {
 }
 
 #[test]
+fn value_delimiter() {
+    #[derive(Debug, Default, PartialEq, Parser)]
+    struct Cli {
+        #[arg(short = 'F', long, use_value_delimiter = true)]
+        features: Vec<String>,
+    }
+
+    check(
+        ["", "--features", "a,b", "-F", "c", "-F=d,e", "--features="],
+        &Cli { features: ["a", "b", "c", "d", "e", ""].map(Into::into).into() },
+    );
+}
+
+#[test]
 fn constraint() {
     #[derive(Debug, Default, PartialEq, Parser)]
     struct Required {
