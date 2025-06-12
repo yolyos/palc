@@ -182,6 +182,17 @@ fn option_option() {
     check([""], &Cli { foo: None, bar: None });
     check(["", "--foo=", "--bar="], &Cli { foo: Some("".into()), bar: Some(None) });
     check(["", "--foo=a", "--bar=b"], &Cli { foo: Some("a".into()), bar: Some(Some("b".into())) });
+
+    // They both expect a value, even if an empty one. Or it will fail.
+    // This behavior matches clap.
+    check_err::<Cli>(
+        ["", "--foo"],
+        expect!["a value is required for '--foo' but none was supplied"],
+    );
+    check_err::<Cli>(
+        ["", "--bar"],
+        expect!["a value is required for '--bar' but none was supplied"],
+    );
 }
 
 #[test]

@@ -354,7 +354,8 @@ pub fn expand_state_def_impl<'i>(
 
         let num_values = match kind {
             FieldKind::BoolSetTrue | FieldKind::Counter => 0,
-            // FIXME: OptionOption should accept 0..=1 values.
+            // NB. OptionOption expects exactly one value, not zero. Just the value can be empty.
+            // clap also agrees with this behavior.
             FieldKind::Option | FieldKind::OptionOption | FieldKind::OptionVec => 1,
         };
 
