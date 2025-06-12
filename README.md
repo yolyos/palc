@@ -28,6 +28,8 @@ Though some of clap features are not-yet-implemented.
 
 <summary>Yet Implemented features</summary>
 
+<!-- TODO: Document these in rustdoc, not here. -->
+
 - Argument behaviors:
   - [x] Boolean flags `--verbose`.
   - [x] Named arguments `--long value`, `-svalue`
@@ -49,6 +51,16 @@ Though some of clap features are not-yet-implemented.
   - [ ] Custom number of values (`arg(num_values)`).
   - [ ] Overrides.
 
+  - List of [magic argument types](https://docs.rs/clap/4.5.40/clap/_derive/index.html#arg-types) with automatic default behaviors:
+    - [x] `T where T: TryFrom<&OsStr> || TryFrom<&str> || FromStr` (named & unnamed)
+    - [x] `bool` (named)
+    - [x] `Option<T>` (named)
+    - [x] `Option<Option<T>>` (named)
+    - [x] `Vec<T>` (named & unnamed)
+    - [x] `Option<Vec<T>>` (named & unnamed)
+    - [ ] `Vec<Vec<T>>`
+    - [ ] `Option<Vec<Vec<T>>>`
+    
   - [x] Default values. (`arg(default_value_t)`)
     - [x] Default pre-parsed string value. (`arg(default_value)`)
       - Note: The provided string value will be parsed at runtime if the

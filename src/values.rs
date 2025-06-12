@@ -14,7 +14,7 @@ mod sealed {
     message = "`{Self}` cannot be parsed into a palc argument value",
     label = "Unparsable type",
     note = "for enum types, try `derive(palc::ValueEnum)` on it",
-    note = "or you can implement either `From<OsString>`, `From<String>` or `FromStr` for it \
+    note = "or you can implement either `From<&OsStr>`, `From<&str>` or `FromStr` for it \
     to make it parseable"
 )]
 pub trait ArgValueInfo<T>: 'static + Sized + sealed::Sealed {
