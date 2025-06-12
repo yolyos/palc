@@ -9,6 +9,7 @@ mod common;
 mod derive_args;
 mod derive_subcommand;
 mod derive_value_enum;
+mod shared;
 
 #[proc_macro_derive(Parser, attributes(arg, command))]
 pub fn derive_parser(tts: TokenStream) -> TokenStream {

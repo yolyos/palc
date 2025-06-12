@@ -8,6 +8,7 @@ use runtime::{ArgsIter, CommandInternal, ParserState};
 mod error;
 mod refl;
 mod runtime;
+mod shared;
 mod values;
 
 #[cfg(feature = "help")]
@@ -30,6 +31,7 @@ pub mod __private {
     pub use std::convert::Infallible;
     pub use std::ffi::{OsStr, OsString};
     pub use std::marker::PhantomData;
+    pub use std::num::NonZero;
     pub use std::str::from_utf8;
     pub use {Default, Err, Fn, Iterator, None, Ok, Option, Some, Vec, bool, char, str, u8, usize};
 
@@ -43,6 +45,7 @@ pub mod __private {
     pub use crate::values::{ArgValueInfo, InferValueParser, ValueEnum};
 
     pub use crate::refl::{RawArgsInfo, RawCommandInfo};
+    pub use crate::shared::{AcceptHyphen, ArgAttrs};
     pub use crate::{Args, Parser, Result, Subcommand};
 }
 

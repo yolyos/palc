@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZero;
 
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, format_ident, quote, quote_spanned};
@@ -10,6 +11,7 @@ use crate::common::{
     Override, TY_OPTION, parse_args_attrs, strip_ty_ctor, wrap_anon_item,
 };
 use crate::derive_subcommand::RawCommandInfo;
+use crate::shared::{AcceptHyphen, ArgAttrs};
 
 pub fn expand(input: &DeriveInput, is_parser: bool) -> TokenStream {
     let mut tts = match expand_args_impl(input, is_parser) {
@@ -145,11 +147,8 @@ struct FieldInfo<'i> {
     /// Matching names for named arguments. Empty for unnamed arguments.
     short_names: String,
     long_names: Vec<String>,
-    arg_name_matchee: Vec<LitStr>,
-    require_eq: bool,
-    global: bool,
-    value_delimiter: Option<char>,
-    accept_hyphen: AcceptHyphen,
+    enc_names: Vec<String>,
+    attrs: ArgAttrs,
 
     // Validations //
     noneness: Noneness,
@@ -180,13 +179,6 @@ enum FieldKind {
     Option,
     OptionOption,
     OptionVec,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum AcceptHyphen {
-    No = 0,
-    OnlyNumber,
-    Yes,
 }
 
 #[derive(Clone, Copy)]
@@ -271,7 +263,8 @@ pub fn expand_state_def_impl<'i>(
     };
 
     let mut seen_long_names = HashMap::new();
-    let mut cvt_long_name = move |name: LitStr, errs: &mut ErrorCollector| -> (LitStr, String) {
+    // -> (enc_name, display_name)
+    let mut cvt_long_name = move |name: LitStr, errs: &mut ErrorCollector| -> (String, String) {
         let s = name.value();
         let display = format!("--{s}");
         if s.is_empty() {
@@ -287,21 +280,21 @@ pub fn expand_state_def_impl<'i>(
                 "arg(long) name must NOT contain '=' or ASCII control characters",
             ));
         }
-        let is_single_char = s.len() == 1;
-        if let Some(prev) = seen_long_names.insert(s, name.span()) {
+        if let Some(prev) = seen_long_names.insert(s.clone(), name.span()) {
             errs.push(syn::Error::new(name.span(), "duplicated long arguments"));
             errs.push(syn::Error::new(prev, "previously defined here"));
         }
-        if is_single_char {
+        if s.len() == 1 {
             // Disambiguate from short names.
-            (LitStr::new(&display, name.span()), display)
+            (display.clone(), display)
         } else {
-            (name, display)
+            (s, display)
         }
     };
 
     let mut seen_short_names = HashMap::new();
-    let mut cvt_short_name = move |name: LitChar, errs: &mut ErrorCollector| -> (LitStr, String) {
+    // -> (enc_name, display_name)
+    let mut cvt_short_name = move |name: LitChar, errs: &mut ErrorCollector| -> (String, String) {
         let c = name.value();
         if c == '-' || c.is_ascii_control() {
             errs.push(syn::Error::new(
@@ -323,8 +316,7 @@ pub fn expand_state_def_impl<'i>(
             errs.push(syn::Error::new(name.span(), "duplicated long arguments"));
             errs.push(syn::Error::new(prev, "previously defined here"));
         }
-        let display = format!("-{c}");
-        (LitStr::new(&display[1..], name.span()), display)
+        (c.into(), format!("-{c}"))
     };
 
     for (field, attrs) in input_fields.iter().zip(field_attrs) {
@@ -358,6 +350,12 @@ pub fn expand_state_def_impl<'i>(
             ArgTyKind::Option(subty) => (FieldKind::Option, subty, FieldFinish::Id),
             ArgTyKind::OptionOption(subty) => (FieldKind::OptionOption, subty, FieldFinish::Id),
             ArgTyKind::Other => (FieldKind::Option, &field.ty, FieldFinish::UnwrapChecked),
+        };
+
+        let num_values = match kind {
+            FieldKind::BoolSetTrue | FieldKind::Counter => 0,
+            // FIXME: OptionOption should accept 0..=1 values.
+            FieldKind::Option | FieldKind::OptionOption | FieldKind::OptionVec => 1,
         };
 
         // Default values.
@@ -401,14 +399,14 @@ pub fn expand_state_def_impl<'i>(
         };
 
         let value_delimiter = if let Some(ch) = &arg.value_delimiter {
-            let chv = ch.value();
+            let ch = ch.value();
             if !matches!(kind, FieldKind::OptionVec) {
                 errs.push(syn::Error::new(
                     ch.span(),
                     "arg(value_delimiter) must be used on Vec-like types",
                 ));
                 None
-            } else if !chv.is_ascii() || chv.is_ascii_control() {
+            } else if !ch.is_ascii() || ch.is_ascii_control() {
                 errs.push(syn::Error::new(
                     ch.span(),
                     r#"arg(value_delimiter) must be non-control ASCII characters. \
@@ -424,7 +422,7 @@ pub fn expand_state_def_impl<'i>(
                 ));
                 None
             } else {
-                Some(chv)
+                Some(NonZero::new(ch as u8).expect("not NUL"))
             }
         } else {
             None
@@ -432,7 +430,7 @@ pub fn expand_state_def_impl<'i>(
 
         let accept_hyphen = match (arg.allow_hyphen_values, arg.allow_negative_numbers) {
             (true, false) => AcceptHyphen::Yes,
-            (false, true) => AcceptHyphen::OnlyNumber,
+            (false, true) => AcceptHyphen::NegativeNumber,
             (false, false) => AcceptHyphen::No,
             (true, true) => {
                 // TODO: More accurate spans.
@@ -469,7 +467,7 @@ pub fn expand_state_def_impl<'i>(
 
             // Display string for the argument name, prefer long names, eg. `--config-file`, `-c`.
             let mut name_display = None;
-            let mut arg_name_matchee = Vec::new();
+            let mut enc_names = Vec::new();
 
             if arg.last || arg.trailing_var_arg {
                 errs.push(Error::new(
@@ -489,14 +487,14 @@ pub fn expand_state_def_impl<'i>(
                     Override::Explicit(name) => name,
                 };
                 long_names.push(name.value());
-                let (matchee, display) = cvt_long_name(name, &mut errs);
-                arg_name_matchee.push(matchee);
+                let (enc_name, display) = cvt_long_name(name, &mut errs);
+                enc_names.push(enc_name);
                 name_display = Some(display);
             }
             for name in arg.alias {
                 long_names.push(name.value());
-                let (matchee, _) = cvt_long_name(name, &mut errs);
-                arg_name_matchee.push(matchee);
+                let (enc_name, _) = cvt_long_name(name, &mut errs);
+                enc_names.push(enc_name);
             }
 
             if let Some(name) = arg.short {
@@ -509,16 +507,24 @@ pub fn expand_state_def_impl<'i>(
                 };
                 short_names.push(name.value());
                 let (matchee, display) = cvt_short_name(name, &mut errs);
-                arg_name_matchee.push(matchee);
+                enc_names.push(matchee);
                 name_display.get_or_insert(display);
             }
             for name in arg.short_alias {
                 short_names.push(name.value());
                 let (matchee, _) = cvt_short_name(name, &mut errs);
-                arg_name_matchee.push(matchee);
+                enc_names.push(matchee);
             }
 
-            assert!(!arg_name_matchee.is_empty());
+            assert!(!enc_names.is_empty());
+
+            let attrs = ArgAttrs {
+                num_values,
+                require_eq: arg.require_equals,
+                accept_hyphen,
+                delimiter: value_delimiter,
+                global: arg.global,
+            };
 
             out.named_fields.push(out.fields.len());
             out.fields.push(FieldInfo {
@@ -528,11 +534,8 @@ pub fn expand_state_def_impl<'i>(
                 finish,
                 short_names,
                 long_names,
-                arg_name_matchee,
-                require_eq: arg.require_equals,
-                global: arg.global,
-                value_delimiter,
-                accept_hyphen,
+                enc_names,
+                attrs,
                 noneness,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -569,11 +572,8 @@ pub fn expand_state_def_impl<'i>(
                 finish,
                 short_names: String::new(),
                 long_names: Vec::new(),
-                arg_name_matchee: Vec::new(),
-                require_eq: false,
-                global: false,
-                value_delimiter,
-                accept_hyphen,
+                enc_names: Vec::new(),
+                attrs: ArgAttrs::new(),
                 noneness,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
@@ -693,10 +693,10 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let flatten_tys = self.flatten_fields.iter().map(|f| f.effective_ty);
         let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
 
-        let unnamed_arg_accept_hyphen =
-            self.catchall_field
-                .as_ref()
-                .map_or(AcceptHyphen::No, |f| fields[f.field_idx].accept_hyphen) as u8;
+        let unnamed_arg_accept_hyphen = self
+            .catchall_field
+            .as_ref()
+            .map_or(AcceptHyphen::No, |f| fields[f.field_idx].attrs.accept_hyphen);
 
         let raw_args_info = RawArgsInfo(self);
 
@@ -736,7 +736,7 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 #feed_named_func
                 #feed_unnamed_func
 
-                fn unnamed_arg_accept_hyphen(&self) -> __rt::u8 {
+                fn unnamed_arg_accept_hyphen(&self) -> __rt::AcceptHyphen {
                     #unnamed_arg_accept_hyphen
                 }
             }
@@ -759,53 +759,27 @@ impl ToTokens for FeedNamedImpl<'_> {
             .named_fields
             .iter()
             .map(|&idx| {
-                let FieldInfo {
-                    ident,
-                    kind,
-                    effective_ty,
-                    arg_name_matchee,
-                    require_eq,
-                    value_delimiter,
-                    accept_hyphen,
-                    ..
-                } = &def.fields[idx];
+                let FieldInfo { ident, kind, effective_ty, enc_names, attrs, .. } =
+                    &def.fields[idx];
                 let value_info = value_info(effective_ty);
-                let allow_hyphen_conf = *accept_hyphen as u8;
                 let action = match kind {
-                    FieldKind::BoolSetTrue => {
-                        quote! { __rt::place_for_flag(&mut self.#ident) }
-                    }
-                    FieldKind::Counter => {
-                        quote! { __rt::place_for_counter(&mut self.#ident) }
-                    }
+                    FieldKind::BoolSetTrue => quote_spanned! {effective_ty.span()=>
+                        __rt::place_for_flag(&mut self.#ident)
+                    },
+                    FieldKind::Counter => quote_spanned! {effective_ty.span()=>
+                        __rt::place_for_counter(&mut self.#ident)
+                    },
                     FieldKind::Option => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_set_value::<_, _, #require_eq, #allow_hyphen_conf>(
-                            &mut self.#ident,
-                            #value_info,
-                        )
+                        __rt::place_for_set_value(&mut self.#ident, #value_info)
                     },
                     FieldKind::OptionOption => quote_spanned! {effective_ty.span()=>
-                        __rt::place_for_set_opt_value::<_, _, #require_eq, #allow_hyphen_conf>(
-                            &mut self.#ident,
-                            #value_info,
-                        )
+                        __rt::place_for_set_opt_value(&mut self.#ident, #value_info)
                     },
-                    FieldKind::OptionVec => match value_delimiter {
-                        Some(ch) => quote_spanned! {effective_ty.span()=>
-                            __rt::place_for_vec_sep::<_, _, #require_eq, #ch, #allow_hyphen_conf>(
-                                &mut self.#ident,
-                                #value_info,
-                            )
-                        },
-                        None => quote_spanned! {effective_ty.span()=>
-                            __rt::place_for_vec::<_, _, #require_eq, #allow_hyphen_conf>(
-                                &mut self.#ident,
-                                #value_info,
-                            )
-                        },
+                    FieldKind::OptionVec => quote_spanned! {effective_ty.span()=>
+                        __rt::place_for_vec(&mut self.#ident, #value_info)
                     },
                 };
-                quote! { #(#arg_name_matchee)|* => #action, }
+                quote! { #(#enc_names)|* => (#action, #attrs), }
             })
             .collect::<TokenStream>();
 
@@ -843,8 +817,8 @@ impl ToTokens for FeedGlobalNamedImpl<'_> {
             .named_fields
             .iter()
             .map(|&idx| &self.0.fields[idx])
-            .filter(|f| f.global)
-            .flat_map(|f| f.arg_name_matchee.iter())
+            .filter(|f| f.attrs.global)
+            .flat_map(|f| f.enc_names.iter())
             .collect::<Vec<_>>();
         if global_names.is_empty() {
             return;
@@ -888,7 +862,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             })
             .collect::<TokenStream>();
 
-        let has_global = def.named_fields.iter().any(|&i| def.fields[i].global);
+        let has_global = def.named_fields.iter().any(|&i| def.fields[i].attrs.global);
         let handle_subcmd = if let Some(SubcommandInfo { ident, effective_ty, .. }) =
             &def.subcommand
         {
@@ -1080,7 +1054,7 @@ impl ToTokens for RawArgsInfo<'_> {
                 }
             }
             buf.push('\n');
-            buf.push(if f.require_eq { '1' } else { '0' });
+            buf.push(if f.attrs.require_eq { '1' } else { '0' });
             buf.push('\n');
             buf.push(if Some(idx) == greedy_idx { '1' } else { '0' });
             buf.push('\n');
