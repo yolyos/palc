@@ -151,7 +151,7 @@ struct FieldInfo<'i> {
     attrs: ArgAttrs,
 
     // Validations //
-    noneness: Noneness,
+    default_expr: Option<TokenStream>,
     exclusive: bool,
     dependencies: Vec<FieldPath>,
     conflicts: Vec<FieldPath>,
@@ -164,12 +164,6 @@ struct FieldInfo<'i> {
     value_display: LitStr,
     doc: Doc,
     hide: bool,
-}
-
-enum Noneness {
-    Optional,
-    Required,
-    DefaultExpr(TokenStream),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,7 +374,7 @@ pub fn expand_state_def_impl<'i>(
                 None
             }
         };
-        let noneness = match default_expr {
+        let (required, default_expr) = match default_expr {
             Some(e) => {
                 if arg.required {
                     errs.push(Error::new(
@@ -388,15 +382,9 @@ pub fn expand_state_def_impl<'i>(
                         "arg(required) conflicts with arg(default_value{,_t})",
                     ));
                 }
-                Noneness::DefaultExpr(e)
+                (false, Some(e))
             }
-            None => {
-                if arg.required || finish == FieldFinish::UnwrapChecked {
-                    Noneness::Required
-                } else {
-                    Noneness::Optional
-                }
-            }
+            None => (arg.required || finish == FieldFinish::UnwrapChecked, None),
         };
 
         let value_delimiter = if let Some(ch) = &arg.value_delimiter {
@@ -525,6 +513,7 @@ pub fn expand_state_def_impl<'i>(
                 accept_hyphen,
                 delimiter: value_delimiter,
                 global: arg.global,
+                required,
             };
 
             out.named_fields.push(out.fields.len());
@@ -537,7 +526,7 @@ pub fn expand_state_def_impl<'i>(
                 long_names,
                 enc_names,
                 attrs,
-                noneness,
+                default_expr,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
@@ -566,6 +555,14 @@ pub fn expand_state_def_impl<'i>(
 
             let is_vec_like = matches!(kind, FieldKind::OptionVec);
             let field_idx = out.fields.len();
+            let attrs = ArgAttrs {
+                num_values: 1,
+                require_eq: false,
+                accept_hyphen,
+                delimiter: value_delimiter,
+                global: false,
+                required,
+            };
             out.fields.push(FieldInfo {
                 ident,
                 kind,
@@ -574,8 +571,8 @@ pub fn expand_state_def_impl<'i>(
                 short_names: String::new(),
                 long_names: Vec::new(),
                 enc_names: Vec::new(),
-                attrs: ArgAttrs::new(),
-                noneness,
+                attrs,
+                default_expr,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
@@ -937,7 +934,7 @@ impl ToTokens for ValidationImpl<'_> {
 
         for f @ FieldInfo { ident, name_display, .. } in &def.fields {
             let name_display = name_display.as_deref().unwrap_or_default();
-            if matches!(f.noneness, Noneness::Required) {
+            if f.attrs.required && f.default_expr.is_none() {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
                         return __rt::missing_required_arg(#name_display)
@@ -988,8 +985,8 @@ impl ToTokens for ValidationImpl<'_> {
         }
 
         // Set default values after checks.
-        for FieldInfo { ident, noneness, .. } in &def.fields {
-            if let Noneness::DefaultExpr(e) = noneness {
+        for FieldInfo { ident, default_expr, .. } in &def.fields {
+            if let Some(e) = default_expr {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
                         self.#ident = __rt::Some(#e);

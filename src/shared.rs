@@ -16,9 +16,12 @@ pub struct ArgAttrs {
     pub delimiter: Option<NonZero<u8>>,
     /// Is this a global argument?
     pub global: bool,
+    /// Is this argument argument required?
+    pub required: bool,
 }
 
 impl ArgAttrs {
+    #[allow(unused, reason = "used by runtime, but not used by proc-macro itself")]
     pub fn new() -> Self {
         ArgAttrs::default()
     }
