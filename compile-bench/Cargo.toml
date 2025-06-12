@@ -4,5 +4,8 @@ version = "0.1.0"
 edition = "2024"
 publish = false # Only for local testing.
 
+[features]
+help = ["palc/default"]
+
 [dependencies]
-palc.path = ".."
+palc = { path = "..", default-features = false, features = ["derive"] }

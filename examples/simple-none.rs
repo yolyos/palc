@@ -1,5 +1,9 @@
-//! This example binary is a baseline for size comparison.
+//! This example is a baseline for size comparison,
+//! to count for `std::env::args_os`'s cost.
+use std::hint::black_box;
+
 fn main() {
-    let _args = std::env::args_os().collect::<Vec<_>>();
+    let args = std::env::args_os().collect::<Vec<_>>();
     println!("hello world");
+    black_box(args);
 }
