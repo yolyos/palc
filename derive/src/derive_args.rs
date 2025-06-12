@@ -685,7 +685,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
         }
 
         let feed_named_func = FeedNamedImpl(self);
-        let feed_global_named_func = FeedGlobalNamedImpl(self);
         let feed_unnamed_func = FeedUnnamedImpl(self);
         let validation = ValidationImpl(self);
 
@@ -727,8 +726,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
                         #(#field_names : #field_finishes,)*
                     })
                 }
-
-                #feed_global_named_func
             }
 
             #[automatically_derived]
@@ -802,33 +799,6 @@ impl ToTokens for FeedNamedImpl<'_> {
         tokens.extend(quote! {
             fn feed_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
                 #body
-            }
-        });
-    }
-}
-
-/// `fn feed_global_named` generator.
-struct FeedGlobalNamedImpl<'i>(&'i ParserStateDefImpl<'i>);
-
-impl ToTokens for FeedGlobalNamedImpl<'_> {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        let global_names = self
-            .0
-            .named_fields
-            .iter()
-            .map(|&idx| &self.0.fields[idx])
-            .filter(|f| f.attrs.global)
-            .flat_map(|f| f.enc_names.iter())
-            .collect::<Vec<_>>();
-        if global_names.is_empty() {
-            return;
-        }
-        tokens.extend(quote! {
-            fn feed_global_named(&mut self, __name: &__rt::str) -> __rt::FeedNamed<'_> {
-                match __name {
-                    #(#global_names)|* => __rt::ParserStateDyn::feed_named(self, __name),
-                    _ => __rt::FeedNamed::Continue(()),
-                }
             }
         });
     }

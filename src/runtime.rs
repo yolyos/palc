@@ -239,10 +239,14 @@ pub trait GlobalChain {
 }
 
 impl GlobalChain for () {}
-impl<S: ParserState> GlobalChain for (&mut S, &mut dyn GlobalChain) {
+impl GlobalChain for (&mut dyn ParserStateDyn, &mut dyn GlobalChain) {
     fn search_global_named(&mut self, enc_name: &str) -> FeedNamed<'_> {
-        self.0.feed_global_named(enc_name)?;
-        self.1.search_global_named(enc_name)
+        match self.0.feed_named(enc_name) {
+            ControlFlow::Break((place, attrs)) if attrs.global => {
+                ControlFlow::Break((place, attrs))
+            }
+            _ => self.1.search_global_named(enc_name),
+        }
     }
 }
 
@@ -305,7 +309,7 @@ pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
             args: &mut ArgsIter<'_>,
             global: GlobalAncestors<'_>,
         ) -> Result<()> {
-            let mut global = (&mut self.0, global);
+            let mut global = (&mut self.0 as &mut dyn ParserStateDyn, global);
             let global =
                 if CUR_HAS_GLOBAL { &mut global as &mut dyn GlobalChain } else { global.1 };
             let subcmd = G::Subcommand::try_parse_with_name(name, args, global)?;
@@ -334,12 +338,6 @@ pub trait ParserState: ParserStateDyn {
 
     fn init() -> Self;
     fn finish(&mut self) -> Result<Self::Output>;
-
-    // The is only called via `GlobalChain::search_global_named` thus do not need to be in vtable.
-    // FIXME: Could we get merge this with `feed_named`?
-    fn feed_global_named(&mut self, _name: &str) -> FeedNamed<'_> {
-        ControlFlow::Continue(())
-    }
 }
 
 /// The helper trait for `place_for_subcommand`.
@@ -484,9 +482,9 @@ pub fn try_parse_with_state(
             }
             Arg::EncodedNamed(enc_name, has_eq, value) => {
                 let (place, attrs) = match state.feed_named(enc_name) {
-                    ControlFlow::Break(place) => place,
+                    ControlFlow::Break(arg) => arg,
                     ControlFlow::Continue(()) => match global.search_global_named(enc_name) {
-                        ControlFlow::Break(place) => place,
+                        ControlFlow::Break(arg) => arg,
                         ControlFlow::Continue(()) => {
                             if named_arg_fallback != AcceptHyphen::No {
                                 todo!()
