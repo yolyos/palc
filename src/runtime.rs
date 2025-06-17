@@ -44,6 +44,24 @@ macro_rules! __const_concat {
     }};
 }
 
+#[cfg(feature = "help")]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __gate_help_str {
+    ($($tt:tt)*) => {
+        $($tt)*
+    };
+}
+
+#[cfg(not(feature = "help"))]
+#[macro_export]
+#[doc(hidden)]
+macro_rules! __gate_help_str {
+    ($($tt:tt)*) => {
+        ""
+    };
+}
+
 pub const fn const_concat_len(strs: &[&str]) -> usize {
     let mut ret = 0;
     let mut i = 0;

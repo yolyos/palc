@@ -10,17 +10,18 @@ pub struct RawArgsInfo {
     /// Subcommand argument, if any.
     pub __subcommand: Option<&'static RawCommandInfo>,
 
-    /// Zero or more '\0'-terminated raw `ArgInfo`.
+    /// Zero or more '\0'-terminated arg descriptions.
     ///
-    /// Each raw `ArgInfo` consists of following strings in order:
+    /// For named arguments, their descriptions always starts with "-".
+    pub __raw_arg_descs: &'static str,
+
+    /// Zero or more '\0'-terminated arg help texts. Only used for help generation.
+    ///
+    /// Each raw `ArgInfo` can either be empty for hidden arguments, or consists
+    /// of following strings in order:
     /// - `required as u8`.
-    /// - Example-like description, eg. `--key <VALUE>`, `-c, --color=<COLOR>`.
-    /// - '\n'.
     /// - Help text.
-    ///
-    /// If either short or long names is non-empty, this is a named argument,
-    /// otherwise it is an unnamed one.
-    pub __raw_args: &'static str,
+    pub __raw_arg_helps: &'static str,
 
     /// The first byte is '1' if there is an optional subcommand, otherwise '0'.
     ///
@@ -39,14 +40,21 @@ pub struct RawArgsInfo {
 impl RawArgsInfo {
     // NB. Used by proc-macro.
     pub const fn empty() -> Self {
-        Self { __subcommand: None, __raw_args: "", __raw_meta: "0" }
+        Self { __subcommand: None, __raw_arg_descs: "", __raw_arg_helps: "", __raw_meta: "0" }
+    }
+
+    #[inline(always)]
+    pub(crate) fn arg_descriptions(&self) -> impl Iterator<Item = &'static str> {
+        // See `RawArgsInfo`.
+        split_terminator(self.__raw_arg_descs, b'\0')
     }
 }
 
 /// Description of a collection of arguments.
 #[derive(Debug, Clone, Copy)]
 pub struct ArgsInfo {
-    raw_args: &'static str,
+    raw_arg_descs: &'static str,
+    raw_arg_helps: &'static str,
     subcommand: Option<&'static RawCommandInfo>,
     is_subcommand_optional: bool,
     raw_doc: &'static str,
@@ -57,7 +65,8 @@ impl ArgsInfo {
         // See `RawArgsInfo`.
         let (fst, raw_doc) = raw.__raw_meta.split_at(1);
         Self {
-            raw_args: raw.__raw_args,
+            raw_arg_descs: raw.__raw_arg_descs,
+            raw_arg_helps: raw.__raw_arg_helps,
             subcommand: raw.__subcommand,
             is_subcommand_optional: fst == "1",
             raw_doc,
@@ -65,7 +74,10 @@ impl ArgsInfo {
     }
 
     pub fn args(&self) -> impl Iterator<Item = ArgInfo> {
-        ArgInfo::iter_from_raw(self.raw_args)
+        // See `RawArgsInfo`.
+        split_terminator(self.raw_arg_descs, b'\0')
+            .zip(split_terminator(self.raw_arg_helps, b'\0'))
+            .filter_map(|(desc, raw_help)| ArgInfo::from_raw(desc, raw_help))
     }
 
     pub fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
@@ -102,24 +114,17 @@ pub enum ArgInfo {
 
 impl ArgInfo {
     // See `RawArgsInfo`.
-    #[inline(never)]
-    fn from_raw(raw: &'static str) -> Self {
+    fn from_raw(description: &'static str, raw_help: &'static str) -> Option<Self> {
         (|| {
-            let [first, long_help] = split_sep_many(raw, b'\n')?;
-            let (required_str, description) = first.split_at(1);
-            let required = required_str == "1";
+            // For hidden arguments, this returns `None`.
+            let (flags, long_help) = raw_help.split_at_checked(1)?;
+            let required = flags.as_bytes()[0] == b'1';
             Some(if description.starts_with('-') {
                 Self::Named(NamedArgInfo { description, required, long_help })
             } else {
                 Self::Unnamed(UnnamedArgInfo { description, required, long_help })
             })
         })()
-        .unwrap()
-    }
-
-    pub(crate) fn iter_from_raw(raw: &'static str) -> impl Iterator<Item = Self> {
-        // See `RawArgsInfo`.
-        split_terminator(raw, b'\0').map(ArgInfo::from_raw)
     }
 
     pub fn to_named(self) -> Option<NamedArgInfo> {

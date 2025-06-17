@@ -38,7 +38,7 @@ pub mod __private {
     pub use crate::runtime::*;
 
     // Macros.
-    pub use crate::{__const_concat, arg_value_info};
+    pub use crate::{__const_concat, __gate_help_str, arg_value_info};
     pub use std::{assert, concat, env, unimplemented, unreachable};
 
     // Used by `__arg_value_info!`

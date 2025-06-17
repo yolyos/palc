@@ -1,10 +1,7 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use crate::{
-    refl::ArgInfo,
-    runtime::{CommandInternal, ParserState},
-};
+use crate::runtime::{CommandInternal, ParserState};
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
 /// This implies either `UserErr: std::error::Error` or it is string-like.
@@ -240,9 +237,7 @@ impl Error {
     pub(crate) fn in_state<S: ParserState>(mut self) -> Self {
         // Avoid referecing other fields, so help docs can still be stripped if unused.
         if let Some(idx) = self.0.arg_idx {
-            self.0.arg_description = ArgInfo::iter_from_raw(S::RAW_ARGS_INFO.__raw_args)
-                .nth(idx.into())
-                .map(|arg| arg.description());
+            self.0.arg_description = S::RAW_ARGS_INFO.arg_descriptions().nth(idx.into());
         }
         self
     }

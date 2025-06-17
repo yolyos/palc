@@ -1006,22 +1006,25 @@ struct RawArgsInfo<'a>(&'a ParserStateDefImpl<'a>);
 impl ToTokens for RawArgsInfo<'_> {
     // See format in `RawArgInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let mut buf = String::new();
+        let raw_descs =
+            self.0.fields.iter().flat_map(|f| [&f.description, "\0"]).collect::<String>();
 
-        for f in self.0.fields.iter().filter(|f| !f.hide) {
-            buf.push(if f.attrs.required { '1' } else { '0' });
-            buf.push_str(&f.description);
-            buf.push('\n');
-            buf.push_str(&f.doc.0);
-            buf.push('\0');
+        let mut raw_help_buf = String::new();
+        for f in &self.0.fields {
+            if !f.hide {
+                raw_help_buf.push(if f.attrs.required { '1' } else { '0' });
+                raw_help_buf.push_str(&f.doc.0);
+            }
+            raw_help_buf.push('\0');
         }
 
-        let raw_args = if self.0.flatten_fields.is_empty() {
-            quote! { #buf }
+        let (raw_descs, raw_helps) = if self.0.flatten_fields.is_empty() {
+            (quote!(#raw_descs), quote!(#raw_help_buf))
         } else {
-            let tys = self.0.flatten_fields.iter().map(|f| f.effective_ty);
+            let tys1 = self.0.flatten_fields.iter().map(|f| f.effective_ty);
+            let tys2 = tys1.clone();
             let mut asserts = TokenStream::new();
-            for ty in tys.clone() {
+            for ty in tys1.clone() {
                 asserts.extend(quote_spanned! {ty.span()=>
                     __rt::assert!(
                         <<#ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__subcommand.is_none(),
@@ -1029,13 +1032,21 @@ impl ToTokens for RawArgsInfo<'_> {
                     );
                 });
             }
-            quote! {{
-                #asserts
-                __rt::__const_concat!(
-                    #buf,
-                    #(<<#tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_args,)*
-                )
-            }}
+            (
+                quote! {{
+                    #asserts
+                    __rt::__const_concat!(
+                        #raw_descs,
+                        #(<<#tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_arg_descs,)*
+                    )
+                }},
+                quote! {
+                    __rt::__const_concat!(
+                        #raw_help_buf,
+                        #(<<#tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__raw_arg_helps,)*
+                    )
+                },
+            )
         };
 
         let (is_subcmd_optional, subcmd) = if let Some(s) = &self.0.subcommand {
@@ -1098,8 +1109,9 @@ impl ToTokens for RawArgsInfo<'_> {
         tokens.extend(quote! {
             __rt::RawArgsInfo {
                 __subcommand: #subcmd,
-                __raw_args: #raw_args,
-                __raw_meta: #raw_meta,
+                __raw_arg_descs: #raw_descs,
+                __raw_arg_helps: __rt::__gate_help_str!(#raw_helps),
+                __raw_meta: __rt::__gate_help_str!(#raw_meta),
             }
         });
     }
