@@ -15,5 +15,5 @@ fn main() {
 fn help() {
     let help = cli::Cli::render_long_help("me");
     println!("{help}");
-    assert!(help.contains("Usage: me --verbose <FILE>"));
+    assert!(help.contains("Usage: me [OPTIONS] <FILE>"));
 }

@@ -554,7 +554,7 @@ pub fn expand_state_def_impl<'i>(
             let is_vec_like = matches!(kind, FieldKind::OptionVec);
 
             let mut description =
-                if arg.required { format!("<{value_name}>") } else { format!("[{value_name}]") };
+                if required { format!("<{value_name}>") } else { format!("[{value_name}]") };
             if is_vec_like {
                 description.push_str("...");
             }

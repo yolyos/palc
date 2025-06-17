@@ -16,7 +16,7 @@ fn help() {
     println!("{help}");
 
     assert!(help.contains("A secure JavaScript and TypeScript runtime"));
-    assert!(help.contains("Usage: me --unstable"));
+    assert!(help.contains("Usage: me [OPTIONS] [COMMAND"));
     assert!(help.contains("-L, --log-level <LOG_LEVEL>"));
 
     // TODO: assert!(help.contains("ENVIRONMENT VARIABLES:"));
@@ -29,6 +29,6 @@ fn help_subcommand() {
     println!("{help}");
 
     assert!(help.contains("Compiles the given script into a self contained executable."));
-    assert!(help.contains("Usage: me compile --output <OUTPUT>"));
-    // TODO: assert!(help.contains("-L, --log-level <LOG_LEVEL>"));
+    assert!(help.contains("Usage: me compile [OPTIONS]"));
+    // assert!(help.contains("-L, --log-level <LOG_LEVEL>"));
 }

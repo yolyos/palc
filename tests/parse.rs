@@ -102,7 +102,7 @@ fn required() {
     );
     check_err::<Cli>(
         ["", "--key", "value"],
-        expect!["the argument '[FILE]' is required but not provided"],
+        expect!["the argument '<FILE>' is required but not provided"],
     );
     check_err::<Cli>(
         ["", "--key", "value", "path"],
@@ -115,7 +115,7 @@ fn required() {
 
     check_err::<Cli>(
         ["", "--key", "value", "sub"],
-        expect!["the argument '[FILE]' is required but not provided"],
+        expect!["the argument '<FILE>' is required but not provided"],
     );
 
     check_err::<Cli>(
