@@ -1,3 +1,11 @@
+//! *Prototype of a command line argument parser with several opposite design goals from [clap].*
+//!
+//! [clap]: https://github.com/clap-rs/clap
+//!
+//! > ⚠️ This project is in alpha stage and is not ready for production yet.
+//! > The API is subject to change. Feedbacks are welcome.
+//!
+//! TODO: Documentations.
 #![forbid(unsafe_code)]
 use std::ffi::OsString;
 use std::path::PathBuf;

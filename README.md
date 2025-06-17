@@ -1,8 +1,14 @@
 # palc
 
-WIP: This project is still working in progress.
+[![crates.io](https://img.shields.io/crates/v/palc)](https://crates.io/crates/palc)
+[![docs.rs](https://img.shields.io/docsrs/palc)](https://docs.rs/palc)
 
-Prototype of a Command Line Argument Parser with several opposite design goals from [clap].
+Prototype of a command line argument parser with several opposite design goals from [clap].
+
+> ⚠️ This project is in alpha stage and is not ready for production yet.
+> The API is subject to change. Feedbacks are welcome.
+
+Check [`./examples/*-palc.rs`](./examples) for usages.
 
 [clap]: https://github.com/clap-rs/clap
 
@@ -123,7 +129,7 @@ Though some of clap features are not-yet-implemented.
 
 </details>
 
-## Different: Fully static via `derive` macros
+## Different: Only via `derive` macros, statically
 
 The only way to define a CLI parser in palc is via `derive`-macros. It is not
 possible to manually write `impl` or even construct it dynamically.
@@ -140,22 +146,30 @@ This implies we do more work in proc-macro while rustc does less work on
 generated code. In compilation time benchmarks, we outperform clap-derive in
 both full build and incremental build.
 
-## Different: No bloat
+## Different: Binary size aware
 
 Despite how many features we have, we keep binary overhead in check.
 Our goal is to give a size overhead that *deserves* its features, without
 unreasonable or meaningless bloat.
-Spoiler: the cost of all these features may be lower than you think.
 
 Unlike other min-size-centric projects, eg. [pico-args] or [gumdrop], we choose
 NOT to sacrifice CLI user experience, or force CLI designers to write more
 (repetitive) code.
 We are striving for a good balance between features and their cost.
 
+In the benchmarks ([`./bench.txt`](./bench.txt)), binary size of small-to-medium
+CLI structs using `palc` is comparable to and sometimes smaller than `argh`.
+
 [pico-args]: https://crates.io/crates/pico-args
 [gumdrop]: https://crates.io/crates/gumdrop
 
 <br>
+
+#### Credit
+
+The derive interface is inspired and mimicking [`clap`][clap]'s derive interface.
+
+The palc runtime design is inspired by [`miniserde`](https://github.com/dtolnay/miniserde).
 
 #### License
 

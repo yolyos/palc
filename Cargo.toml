@@ -31,7 +31,7 @@ ref-cast = "1.0.24"
 
 [dependencies.palc-derive]
 path = "./derive"
-version = "0.0.1"
+version = "=0.0.1"
 optional = true
 
 [dev-dependencies]

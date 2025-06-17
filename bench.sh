@@ -35,7 +35,7 @@ done
 
 getCompileTime() {
     CARGO_TARGET_DIR="$tmpdir" command time --format "%Uuser %Ssystem %Eelapsed" \
-        cargo build --package compile-bench --quiet "$@" || die "failed to build"
+        cargo build --package compile-bench --quiet "$@" 2>&1 || die "failed to build"
 }
 
 if [[ "comptime" = *"$filter"* ]]; then
