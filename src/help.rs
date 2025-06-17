@@ -53,7 +53,12 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]
     for arg in info.named_args() {
         has_named = true;
         if arg.required() {
-            w!(" ", arg.description());
+            let mut desc = arg.description();
+            if matches!(desc.as_bytes(), [b'-', short, _, _, ..] if *short != b'-') {
+                // `-s, --long <VAL>` => `--long <VAL>`
+                desc = &desc[4..];
+            }
+            w!(" ", desc);
         } else {
             has_opt_named = true;
         }
