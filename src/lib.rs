@@ -5,6 +5,8 @@
 //! > ⚠️ This project is in alpha stage and is not ready for production yet.
 //! > The API is subject to change. Feedbacks are welcome.
 //!
+//! See [repository README](https://github.com/oxalica/palc?tab=readme-ov-file#palc) for details.
+//!
 //! TODO: Documentations.
 #![forbid(unsafe_code)]
 use std::ffi::OsString;
