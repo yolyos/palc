@@ -65,8 +65,7 @@ impl ArgsInfo {
     }
 
     pub fn args(&self) -> impl Iterator<Item = ArgInfo> {
-        // See `RawArgsInfo`.
-        split_terminator(self.raw_args, b'\0').map(ArgInfo::from_raw)
+        ArgInfo::iter_from_raw(self.raw_args)
     }
 
     pub fn named_args(&self) -> impl Iterator<Item = NamedArgInfo> {
@@ -118,12 +117,24 @@ impl ArgInfo {
         .unwrap()
     }
 
+    pub(crate) fn iter_from_raw(raw: &'static str) -> impl Iterator<Item = Self> {
+        // See `RawArgsInfo`.
+        split_terminator(raw, b'\0').map(ArgInfo::from_raw)
+    }
+
     pub fn to_named(self) -> Option<NamedArgInfo> {
         if let Self::Named(v) = self { Some(v) } else { None }
     }
 
     pub fn to_unnamed(self) -> Option<UnnamedArgInfo> {
         if let Self::Unnamed(v) = self { Some(v) } else { None }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ArgInfo::Named(arg) => arg.description(),
+            ArgInfo::Unnamed(arg) => arg.description(),
+        }
     }
 }
 

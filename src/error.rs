@@ -1,7 +1,10 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use crate::runtime::CommandInternal;
+use crate::{
+    refl::ArgInfo,
+    runtime::{CommandInternal, ParserState},
+};
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
 /// This implies either `UserErr: std::error::Error` or it is string-like.
@@ -19,9 +22,11 @@ where
 struct Inner {
     kind: ErrorKind,
 
-    /// The argument we are parsing into, when the error occurs.
+    arg_idx: Option<u8>,
+
+    /// The target argument we are parsing into, when the error occurs.
     /// For unknown arguments or subcommand, this is `None`.
-    arg_display: Option<String>,
+    arg_description: Option<&'static str>,
     // The unexpected raw input we are parsing, when the error occurs.
     /// For finalization errors like constraint violation, this is `None`.
     input: Option<OsString>,
@@ -71,7 +76,8 @@ impl fmt::Debug for Error {
         let e = &*self.0;
         let mut s = f.debug_struct("Error");
         s.field("kind", &e.kind)
-            .field("arg_display", &e.arg_display)
+            .field("arg_idx", &e.arg_idx)
+            .field("arg_description", &e.arg_description)
             .field("input", &e.input)
             .field("source", &e.source);
         #[cfg(feature = "help")]
@@ -97,7 +103,7 @@ impl fmt::Display for Error {
         };
         let opt_arg = |f: &mut fmt::Formatter<'_>, with_for: bool| {
             // TODO: Detail argument syntax.
-            if let Some(arg) = &e.arg_display {
+            if let Some(arg) = &e.arg_description {
                 f.write_str(if with_for { " for '" } else { " '" })?;
                 f.write_str(arg)?;
                 f.write_str("'")?;
@@ -170,11 +176,12 @@ impl fmt::Display for Error {
 }
 
 impl Error {
-    fn new(kind: ErrorKind, arg_display: Option<String>, input: Option<OsString>) -> Self {
+    fn new(kind: ErrorKind) -> Self {
         Self(Box::new(Inner {
             kind,
-            arg_display,
-            input,
+            arg_idx: None,
+            arg_description: None,
+            input: None,
             source: None,
             #[cfg(feature = "help")]
             subcommand_path: Vec::new(),
@@ -184,25 +191,18 @@ impl Error {
     /// Create an custom error with given reason.
     pub fn custom(reason: impl Into<String>) -> Self {
         let source = reason.into().into();
-        let mut e = Self::new(ErrorKind::Custom, None, None);
+        let mut e = Self::new(ErrorKind::Custom);
         e.0.source = Some(source);
         e
     }
 
-    pub(crate) fn with_named_arg(mut self, enc_arg: &str) -> Self {
-        let mut buf = String::with_capacity(2 + enc_arg.len());
-        if enc_arg.chars().nth(1).is_none() {
-            buf.push('-');
-        } else if !enc_arg.starts_with("--") {
-            buf.push_str("--");
-        }
-        buf.push_str(enc_arg);
-        self.0.arg_display = Some(buf);
+    pub(crate) fn with_source(mut self, source: DynStdError) -> Self {
+        self.0.source = Some(source);
         self
     }
 
-    pub(crate) fn with_source(mut self, source: DynStdError) -> Self {
-        self.0.source = Some(source);
+    pub(crate) fn with_arg_idx(mut self, arg_idx: u8) -> Self {
+        self.0.arg_idx = Some(arg_idx);
         self
     }
 
@@ -216,28 +216,36 @@ impl Error {
     pub(crate) fn in_subcommand<S: CommandInternal>(self, _subcmd: String) -> Self {
         self
     }
+
+    #[cold]
+    pub(crate) fn in_state<S: ParserState>(mut self) -> Self {
+        // Avoid referecing other fields, so help docs can still be stripped if unused.
+        if let Some(idx) = self.0.arg_idx {
+            self.0.arg_description = ArgInfo::iter_from_raw(S::RAW_ARGS_INFO.__raw_args)
+                .nth(idx.into())
+                .map(|arg| arg.description());
+        }
+        self
+    }
 }
 
 impl From<ErrorKind> for Error {
     #[cold]
     fn from(kind: ErrorKind) -> Self {
-        Self::new(kind, None, None)
+        Self::new(kind)
     }
 }
 
 impl ErrorKind {
     #[cold]
     pub(crate) fn with_input(self, input: OsString) -> Error {
-        Error::new(self, None, Some(input))
+        let mut err = Error::new(self);
+        err.0.input = Some(input);
+        err
     }
 
     #[cold]
-    pub(crate) fn with_arg_display(self, arg_display: &str) -> Error {
-        Error::new(self, Some(arg_display.into()), None)
-    }
-
-    #[cold]
-    pub(crate) fn with_named_arg(self, enc_arg: &str) -> Error {
-        Error::from(self).with_named_arg(enc_arg)
+    pub(crate) fn with_arg_idx(self, arg_idx: u8) -> Error {
+        Error::new(self).with_arg_idx(arg_idx)
     }
 }

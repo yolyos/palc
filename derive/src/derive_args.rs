@@ -61,6 +61,10 @@ fn expand_args_impl(def: &DeriveInput, is_parser: bool) -> syn::Result<ArgsImpl<
     let mut errs = ErrorCollector::default();
     let cmd_meta = errs.collect(CommandMeta::parse_attrs(&def.attrs)).unwrap_or_default();
 
+    if u8::try_from(fields.named.len()).is_err() {
+        return Err(Error::new(def.ident.span(), "derive(Args) only supports up to 255 fields"));
+    }
+
     let state_name = format_ident!("{}State", def.ident);
     let struct_name = def.ident.to_token_stream();
     let state = errs.collect(expand_state_def_impl(
@@ -484,22 +488,25 @@ pub fn expand_state_def_impl<'i>(
             assert!(!enc_names.is_empty());
 
             let description = {
-                let sep = if arg.require_equals { '=' } else { ' ' };
-                match (primary_short_name.map(|s| s.value()), primary_long_name.map(|s| s.value()))
-                {
-                    (Some(short), Some(long)) => {
-                        format!("-{short}, --{long}{sep}<{value_name}>")
-                    }
-                    (_, Some(long)) => {
-                        format!("--{long}{sep}<{value_name}>")
-                    }
-                    (Some(short), _) => {
-                        format!("-{short}{sep}<{value_name}>")
-                    }
+                use std::fmt::Write;
+
+                let mut buf = match (
+                    primary_short_name.map(|s| s.value()),
+                    primary_long_name.map(|s| s.value()),
+                ) {
+                    (Some(short), Some(long)) => format!("-{short}, --{long}"),
+                    (_, Some(long)) => format!("--{long}"),
+                    (Some(short), _) => format!("-{short}"),
                     (None, None) => unreachable!(),
+                };
+                if num_values > 0 {
+                    write!(buf, "{}<{}>", if arg.require_equals { '=' } else { ' ' }, value_name)
+                        .unwrap();
                 }
+                buf
             };
 
+            let field_idx = out.fields.len();
             let attrs = ArgAttrs {
                 num_values,
                 require_eq: arg.require_equals,
@@ -507,9 +514,10 @@ pub fn expand_state_def_impl<'i>(
                 delimiter: value_delimiter,
                 global: arg.global,
                 required,
+                index: field_idx as _,
             };
 
-            out.named_fields.push(out.fields.len());
+            out.named_fields.push(field_idx);
             out.fields.push(FieldInfo {
                 ident,
                 kind,
@@ -559,6 +567,7 @@ pub fn expand_state_def_impl<'i>(
                 delimiter: value_delimiter,
                 global: false,
                 required,
+                index: field_idx as _,
             };
             out.fields.push(FieldInfo {
                 ident,
@@ -922,16 +931,16 @@ impl ToTokens for ValidationImpl<'_> {
         if def.fields.iter().any(|f| f.exclusive) {
             let names = def.fields.iter().map(|f| f.ident).chain(def.subcommand.map(|s| s.ident));
             tokens.extend(quote! {
-                let __argcnt = 0usize #(+ self.#names.is_none() as usize)*;
+                let __argcnt = 0usize #(+ self.#names.is_some() as usize)*;
             });
         }
 
-        for f @ FieldInfo { ident, description, .. } in &def.fields {
+        for (f, idx) in def.fields.iter().zip(0u8..) {
+            let ident = f.ident;
             if f.attrs.required && f.default_expr.is_none() {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
-                        // FIXME: This will result in duplicated rodata.
-                        return __rt::missing_required_arg(#description)
+                        return __rt::missing_required_arg(#idx)
                     }
                 });
             }
@@ -940,7 +949,7 @@ impl ToTokens for ValidationImpl<'_> {
             if f.exclusive {
                 checks.extend(quote! {
                     if __argcnt != 1 {
-                        return __rt::fail_constraint(#description);
+                        return __rt::fail_constraint(#idx);
                     }
                 });
             }
@@ -948,7 +957,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.dependencies.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_none())||* {
-                        return __rt::fail_constraint(#description);
+                        return __rt::fail_constraint(#idx);
                     }
                 });
             }
@@ -956,7 +965,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.conflicts.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_some())||* {
-                        return __rt::fail_constraint(#description);
+                        return __rt::fail_constraint(#idx);
                     }
                 });
             }

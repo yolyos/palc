@@ -60,21 +60,22 @@ fn require_equals() {
         verbose: bool,
     }
 
-    // FIXME: The argument mentioned in error message should uniformly be its
-    // description `-f, --file=<FILE>`.
     check_err::<Cli>(
         ["", "--file", "-"],
-        expect!["equal sign is needed when assigning values for '--file'"],
+        expect!["equal sign is needed when assigning values for '-f, --file=<FILE>'"],
     );
     check_err::<Cli>(
         ["", "-f", "-"],
-        expect!["equal sign is needed when assigning values for '-f'"],
+        expect!["equal sign is needed when assigning values for '-f, --file=<FILE>'"],
     );
     check_err::<Cli>(
         ["", "-vf", "-"],
-        expect!["equal sign is needed when assigning values for '-f'"],
+        expect!["equal sign is needed when assigning values for '-f, --file=<FILE>'"],
     );
-    check_err::<Cli>(["", "-fv"], expect!["equal sign is needed when assigning values for '-f'"]);
+    check_err::<Cli>(
+        ["", "-fv"],
+        expect!["equal sign is needed when assigning values for '-f, --file=<FILE>'"],
+    );
 
     check(["", "-f="], &Cli { verbose: false, file: Some("".into()) });
     check(["", "-f=v"], &Cli { verbose: false, file: Some("v".into()) });
@@ -116,7 +117,7 @@ fn required() {
 
     check_err::<Cli>(
         ["", "--key", "value", "--key=value"],
-        expect!["the argument '--key' cannot be used multiple times"],
+        expect!["the argument '--key <KEY>' cannot be used multiple times"],
     );
 
     let expect = Cli { key: "value".into(), file: "path".into(), sub: Sub::Sub };
@@ -166,7 +167,7 @@ fn optional() {
 
     check_err::<Cli>(
         ["", "--key", "value", "--key=value"],
-        expect!["the argument '--key' cannot be used multiple times"],
+        expect!["the argument '--key <KEY>' cannot be used multiple times"],
     );
     check_err::<Cli>(
         ["", "--flag", "--flag"],
@@ -192,11 +193,11 @@ fn option_option() {
     // This behavior matches clap.
     check_err::<Cli>(
         ["", "--foo"],
-        expect!["a value is required for '--foo' but none was supplied"],
+        expect!["a value is required for '--foo <FOO>' but none was supplied"],
     );
     check_err::<Cli>(
         ["", "--bar"],
-        expect!["a value is required for '--bar' but none was supplied"],
+        expect!["a value is required for '--bar <BAR>' but none was supplied"],
     );
 }
 
@@ -390,7 +391,7 @@ fn global() {
 
     check_err::<Cli>(
         ["", "-d2", "deep", "-d0"],
-        expect!["the argument '-d' cannot be used multiple times"],
+        expect!["the argument '-d, --debug <DEBUG>' cannot be used multiple times"],
     );
 }
 
@@ -413,16 +414,16 @@ fn hyphen_named() {
 
     check_err::<Cli>(
         ["", "--no", "-1"],
-        expect!["a value is required for '--no' but none was supplied"],
+        expect!["a value is required for '--no <NO>' but none was supplied"],
     );
     check_err::<Cli>(
         ["", "--no", "-f"],
-        expect!["a value is required for '--no' but none was supplied"],
+        expect!["a value is required for '--no <NO>' but none was supplied"],
     );
 
     check_err::<Cli>(
         ["", "--number", "-f"],
-        expect!["a value is required for '--number' but none was supplied"],
+        expect!["a value is required for '--number <NUMBER>' but none was supplied"],
     );
     check(["", "--number", "-1"], &Cli { number: Some(-1), ..Cli::default() });
 
@@ -492,11 +493,11 @@ fn constraint() {
     );
     check_err::<Required>(
         ["", "--key=foo", "path"],
-        expect!["argument '-f <FORCE>' is required but not provided"],
+        expect!["argument '-f' is required but not provided"],
     );
     check_err::<Required>(
         ["", "--key=foo", "path", "-f"],
-        expect!["argument '-v <VERBOSE>' is required but not provided"],
+        expect!["argument '-v' is required but not provided"],
     );
 
     check(

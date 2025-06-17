@@ -18,6 +18,9 @@ pub struct ArgAttrs {
     pub global: bool,
     /// Is this argument argument required?
     pub required: bool,
+
+    /// The field index in the containing struct implementing `Args`.
+    pub index: u8,
 }
 
 impl ArgAttrs {
