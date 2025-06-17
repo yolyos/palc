@@ -12,12 +12,10 @@ pub struct RawArgsInfo {
 
     /// Zero or more '\0'-terminated raw `ArgInfo`.
     ///
-    /// Each raw `ArgInfo` consists of '\n'-terminated elements in following order:
-    /// - Short names concatenated without separator.
-    /// - Long names concatenated, each terminated by '\t'.
-    /// - Value names concatenated, each terminated by '\t'.
-    /// - `require_eq as u8`
-    /// - `greedy as u8`
+    /// Each raw `ArgInfo` consists of following strings in order:
+    /// - `required as u8`.
+    /// - Example-like description, eg. `--key <VALUE>`, `-c, --color=<COLOR>`.
+    /// - '\n'.
     /// - Help text.
     ///
     /// If either short or long names is non-empty, this is a named argument,
@@ -108,21 +106,13 @@ impl ArgInfo {
     #[inline(never)]
     fn from_raw(raw: &'static str) -> Self {
         (|| {
-            let [raw_short_names, raw_long_names, raw_value_names, require_eq, greedy, long_help] =
-                split_sep_many(raw, b'\n')?;
-            let require_eq = require_eq == "1";
-            let greedy = greedy == "1";
-            Some(if !raw_short_names.is_empty() || !raw_long_names.is_empty() {
-                Self::Named(NamedArgInfo {
-                    raw_short_names,
-                    raw_long_names,
-                    raw_value_names,
-                    require_eq,
-                    greedy,
-                    long_help,
-                })
+            let [first, long_help] = split_sep_many(raw, b'\n')?;
+            let (required_str, description) = first.split_at(1);
+            let required = required_str == "1";
+            Some(if description.starts_with('-') {
+                Self::Named(NamedArgInfo { description, required, long_help })
             } else {
-                Self::Unnamed(UnnamedArgInfo { raw_value_names, greedy, long_help })
+                Self::Unnamed(UnnamedArgInfo { description, required, long_help })
             })
         })()
         .unwrap()
@@ -140,36 +130,18 @@ impl ArgInfo {
 /// Description of a named argument.
 #[derive(Debug, Clone, Copy)]
 pub struct NamedArgInfo {
-    raw_long_names: &'static str,
-    raw_short_names: &'static str,
-    raw_value_names: &'static str,
-    require_eq: bool,
-    greedy: bool,
+    required: bool,
+    description: &'static str,
     long_help: &'static str,
 }
 
 impl NamedArgInfo {
-    pub fn short_names(&self) -> impl Iterator<Item = char> {
-        // NB. Currently short names are always ASCII.
-        self.raw_short_names.bytes().map(|b| b as char)
+    pub fn description(&self) -> &'static str {
+        self.description
     }
 
-    pub fn long_names(&self) -> impl Iterator<Item = &'static str> {
-        // See `RawArgInfo`
-        split_terminator(self.raw_long_names, b'\t').filter(|s| !s.is_empty())
-    }
-
-    pub fn value_names(&self) -> impl Iterator<Item = &'static str> {
-        // See `RawArgInfo`
-        split_terminator(self.raw_value_names, b'\t').filter(|s| !s.is_empty())
-    }
-
-    pub fn requires_eq(&self) -> bool {
-        self.require_eq
-    }
-
-    pub fn greedy(&self) -> bool {
-        self.greedy
+    pub fn required(&self) -> bool {
+        self.required
     }
 
     pub fn long_help(&self) -> Option<&'static str> {
@@ -180,19 +152,18 @@ impl NamedArgInfo {
 /// Description of an unnamed (positional) argument.
 #[derive(Debug, Clone, Copy)]
 pub struct UnnamedArgInfo {
-    raw_value_names: &'static str,
-    greedy: bool,
+    description: &'static str,
+    required: bool,
     long_help: &'static str,
 }
 
 impl UnnamedArgInfo {
-    pub fn value_names(&self) -> impl Iterator<Item = &'static str> {
-        // See `ArgInfo::from_raw`
-        split_terminator(self.raw_value_names, b'\t')
+    pub fn description(&self) -> &'static str {
+        self.description
     }
 
-    pub fn greedy(&self) -> bool {
-        self.greedy
+    pub fn required(&self) -> bool {
+        self.required
     }
 
     pub fn long_help(&self) -> Option<&'static str> {

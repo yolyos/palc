@@ -60,6 +60,8 @@ fn require_equals() {
         verbose: bool,
     }
 
+    // FIXME: The argument mentioned in error message should uniformly be its
+    // description `-f, --file=<FILE>`.
     check_err::<Cli>(
         ["", "--file", "-"],
         expect!["equal sign is needed when assigning values for '--file'"],
@@ -93,20 +95,23 @@ fn required() {
         sub: Sub,
     }
 
-    check_err::<Cli>(["", "path"], expect!["argument '--key' is required but not provided"]);
+    check_err::<Cli>(["", "path"], expect!["argument '--key <KEY>' is required but not provided"]);
     check_err::<Cli>(
         ["", "--key", "value"],
-        expect!["argument 'FILE' is required but not provided"],
+        expect!["argument '[FILE]' is required but not provided"],
     );
     check_err::<Cli>(
         ["", "--key", "value", "path"],
         expect!["subcommand is required but not provided"],
     );
-    check_err::<Cli>(["", "path", "sub"], expect!["argument '--key' is required but not provided"]);
+    check_err::<Cli>(
+        ["", "path", "sub"],
+        expect!["argument '--key <KEY>' is required but not provided"],
+    );
 
     check_err::<Cli>(
         ["", "--key", "value", "sub"],
-        expect!["argument 'FILE' is required but not provided"],
+        expect!["argument '[FILE]' is required but not provided"],
     );
 
     check_err::<Cli>(
@@ -480,18 +485,18 @@ fn constraint() {
         verbose: u8,
     }
 
-    check_err::<Required>([""], expect!["argument '--key' is required but not provided"]);
+    check_err::<Required>([""], expect!["argument '--key <KEY>' is required but not provided"]);
     check_err::<Required>(
         ["", "--key=foo"],
-        expect!["argument 'FILES' is required but not provided"],
+        expect!["argument '<FILES>...' is required but not provided"],
     );
     check_err::<Required>(
         ["", "--key=foo", "path"],
-        expect!["argument '-f' is required but not provided"],
+        expect!["argument '-f <FORCE>' is required but not provided"],
     );
     check_err::<Required>(
         ["", "--key=foo", "path", "-f"],
-        expect!["argument '-v' is required but not provided"],
+        expect!["argument '-v <VERBOSE>' is required but not provided"],
     );
 
     check(

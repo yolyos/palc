@@ -49,30 +49,21 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]
         w!(" ", cmd);
     }
 
-    let mut has_named @ mut has_unnamed = false;
-    // TODO: Hide optional arguments?
+    let mut has_named @ mut has_opt_named @ mut has_unnamed = false;
     for arg in info.named_args() {
         has_named = true;
-        if let Some(name) = arg.long_names().next() {
-            w!(" --", name);
+        if arg.required() {
+            w!(" ", arg.description());
         } else {
-            w!(" -", arg.short_names().next().unwrap().encode_utf8(&mut [0u8; 4]));
+            has_opt_named = true;
         }
-        // TODO: Multi-value.
-        if let Some(value_name) = arg.value_names().next() {
-            let start = if arg.requires_eq() { "=<" } else { " <" };
-            w!(start, value_name, ">");
-        }
+    }
+    if has_opt_named {
+        w!(" [OPTIONS]");
     }
     for arg in info.unnamed_args() {
         has_unnamed = true;
-        if arg.greedy() {
-            w!(" [", arg.value_names().next().unwrap(), "]...");
-        } else {
-            for value_name in arg.value_names() {
-                w!(" <", value_name, ">");
-            }
-        }
+        w!(" ", arg.description());
     }
     let subcmd = info.subcommand();
     if subcmd.is_some() {
@@ -94,13 +85,14 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]
 
     if has_unnamed {
         w!("\nArguments:\n");
-        for (i, arg) in info.unnamed_args().enumerate() {
-            if i > 0 {
+        let mut first = true;
+        for arg in info.unnamed_args() {
+            if first {
+                first = false;
+            } else {
                 w!("\n");
             }
-            for value_name in arg.value_names() {
-                w!("  <", value_name, ">\n");
-            }
+            w!("  ", arg.description());
             if let Some(help) = arg.long_help() {
                 for (j, s) in help.split_terminator('\n').enumerate() {
                     if j > 0 {
@@ -118,20 +110,8 @@ pub(crate) fn render_help_into(out: &mut String, rev_path: &[SubcommandPathFrag]
         w!("\nOptions:\n");
 
         for arg in info.named_args() {
-            match (arg.short_names().next(), arg.long_names().next()) {
-                (None, None) => unreachable!(),
-                (None, Some(long)) => w!("      --", long),
-                (Some(short), None) => w!("  -", short.encode_utf8(&mut [0u8; 4])),
-                (Some(short), Some(long)) => {
-                    w!("  -", short.encode_utf8(&mut [0u8; 4]), ", ", "--", long)
-                }
-            };
-            // TODO: Multi-value.
-            if let Some(value_name) = arg.value_names().next() {
-                let start = if arg.requires_eq() { "=<" } else { " <" };
-                w!(start, value_name, ">");
-            }
-            w!("\n");
+            let padding = if arg.description().starts_with("--") { "      " } else { "  " };
+            w!(padding, arg.description(), "\n");
             if let Some(help) = arg.long_help() {
                 for (j, s) in help.split_terminator('\n').enumerate() {
                     if j != 0 {

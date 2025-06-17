@@ -144,9 +144,7 @@ struct FieldInfo<'i> {
     finish: FieldFinish,
 
     // Arg configurables //
-    /// Matching names for named arguments. Empty for unnamed arguments.
-    short_names: String,
-    long_names: Vec<String>,
+    /// Encoded names for matching. Empty for unnamed arguments.
     enc_names: Vec<String>,
     attrs: ArgAttrs,
 
@@ -157,11 +155,8 @@ struct FieldInfo<'i> {
     conflicts: Vec<FieldPath>,
 
     // Docs //
-    /// Display string for the name, eg. `--config-file`, `-c`, or `CONFIG_FILE` for unnamed.
-    /// This may be `None` if all names are hidden.
-    name_display: Option<String>,
-    /// Display string for the value, eg. `CONFIG_FILE`.
-    value_display: LitStr,
+    /// Example-like description, eg. `--key <VALUE>`, `-c, --color=<COLOR>`.
+    description: String,
     doc: Doc,
     hide: bool,
 }
@@ -220,6 +215,50 @@ impl ToTokens for FieldFinish {
     }
 }
 
+fn encode_long_name(name: &LitStr, errs: &mut ErrorCollector) -> String {
+    let s = name.value();
+    if s.is_empty() {
+        errs.push(syn::Error::new(name.span(), "arg(long) name must NOT be empty"));
+    } else if s.starts_with('-') {
+        errs.push(syn::Error::new(
+                name.span(),
+                "arg(long) name must NOT specify leading '-', they are always assumed to be '--'-prefixed",
+            ));
+    } else if s.contains(|c: char| c == '=' && c.is_ascii_control()) {
+        errs.push(syn::Error::new(
+            name.span(),
+            "arg(long) name must NOT contain '=' or ASCII control characters",
+        ));
+    }
+    if s.len() > 1 {
+        s
+    } else {
+        // Disambiguate from short names.
+        format!("--{s}")
+    }
+}
+
+fn encode_short_name(name: &LitChar, errs: &mut ErrorCollector) -> String {
+    let c = name.value();
+    if c == '-' || c.is_ascii_control() {
+        errs.push(syn::Error::new(
+            name.span(),
+            "arg(short) name must NOT be '-' or ASCII control characters",
+        ));
+    } else if !c.is_ascii() {
+        // NB. It is assumed to be ASCII in `refl::NamedArgInfo::short_args()` and
+        // `ArgsIter::next_arg()`.
+        errs.push(syn::Error::new(
+            name.span(),
+            r#"Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \
+                A unicode codepoint is not necessarity a "character" in human sense, thus \
+                automatic splitting or argument de-bundling may give unexpected results. \
+                If you do want this to be supported, convince us by opening an issue."#,
+        ));
+    }
+    c.into()
+}
+
 pub fn expand_state_def_impl<'i>(
     vis: &'i Visibility,
     cmd_meta: Option<Box<CommandMeta>>,
@@ -256,61 +295,12 @@ pub fn expand_state_def_impl<'i>(
         }
     };
 
-    let mut seen_long_names = HashMap::new();
-    // -> (enc_name, display_name)
-    let mut cvt_long_name = move |name: LitStr, errs: &mut ErrorCollector| -> (String, String) {
-        let s = name.value();
-        let display = format!("--{s}");
-        if s.is_empty() {
-            errs.push(syn::Error::new(name.span(), "arg(long) name must NOT be empty"));
-        } else if s.starts_with('-') {
-            errs.push(syn::Error::new(
-                name.span(),
-                "arg(long) name must NOT specify leading '-', they are always assumed to be '--'-prefixed",
-            ));
-        } else if s.contains(|c: char| c == '=' && c.is_ascii_control()) {
-            errs.push(syn::Error::new(
-                name.span(),
-                "arg(long) name must NOT contain '=' or ASCII control characters",
-            ));
+    let mut seen_enc_names = HashMap::new();
+    let mut check_dup_name = |enc_name: String, span: Span, errs: &mut ErrorCollector| {
+        if let Some(prev_span) = seen_enc_names.insert(enc_name, span) {
+            errs.push(syn::Error::new(span, "duplicated argument names"));
+            errs.push(syn::Error::new(prev_span, "previously defined here"));
         }
-        if let Some(prev) = seen_long_names.insert(s.clone(), name.span()) {
-            errs.push(syn::Error::new(name.span(), "duplicated long arguments"));
-            errs.push(syn::Error::new(prev, "previously defined here"));
-        }
-        if s.len() == 1 {
-            // Disambiguate from short names.
-            (display.clone(), display)
-        } else {
-            (s, display)
-        }
-    };
-
-    let mut seen_short_names = HashMap::new();
-    // -> (enc_name, display_name)
-    let mut cvt_short_name = move |name: LitChar, errs: &mut ErrorCollector| -> (String, String) {
-        let c = name.value();
-        if c == '-' || c.is_ascii_control() {
-            errs.push(syn::Error::new(
-                name.span(),
-                "arg(short) name must NOT be '-' or ASCII control characters",
-            ));
-        } else if !c.is_ascii() {
-            // NB. It is assumed to be ASCII in `refl::NamedArgInfo::short_args()` and
-            // `ArgsIter::next_arg()`.
-            errs.push(syn::Error::new(
-                name.span(),
-                r#"Non-ASCII arg(short) name is reserved. Use `arg(long)` instead. \
-                A unicode codepoint is not necessarity a "character" in human sense, thus \
-                automatic splitting or argument de-bundling may give unexpected results. \
-                If you do want this to be supported, convince us by opening an issue."#,
-            ));
-        }
-        if let Some(prev) = seen_short_names.insert(c, name.span()) {
-            errs.push(syn::Error::new(name.span(), "duplicated long arguments"));
-            errs.push(syn::Error::new(prev, "previously defined here"));
-        }
-        (c.into(), format!("-{c}"))
     };
 
     for (field, attrs) in input_fields.iter().zip(field_attrs) {
@@ -440,23 +430,19 @@ pub fn expand_state_def_impl<'i>(
             ));
         }
 
-        let value_display = match &arg.value_name {
-            Some(s) => s.clone(),
-            None => LitStr::new(&heck::AsShoutySnekCase(&ident_str).to_string(), ident.span()),
+        let value_name = match &arg.value_name {
+            Some(s) => s.value(),
+            None => heck::AsShoutySnekCase(&ident_str).to_string(),
         };
-        if value_display.value().contains(|ch: char| ch.is_ascii_control()) {
+        if value_name.contains(|ch: char| ch.is_ascii_control()) {
             errs.push(syn::Error::new(
-                value_display.span(),
+                value_name.span(),
                 "arg(value_name) must NOT contain ASCII control characters",
             ));
         }
 
         if arg.is_named() {
             // Named arguments.
-
-            // Display string for the argument name, prefer long names, eg. `--config-file`, `-c`.
-            let mut name_display = None;
-            let mut enc_names = Vec::new();
 
             if arg.last || arg.trailing_var_arg {
                 errs.push(Error::new(
@@ -466,46 +452,53 @@ pub fn expand_state_def_impl<'i>(
                 continue;
             }
 
-            let mut long_names = Vec::new();
-            let mut short_names = String::new();
-            if let Some(name) = arg.long {
-                let name = match name {
-                    Override::Inherit => {
-                        LitStr::new(&heck::AsKebabCase(&ident_str).to_string(), ident_str.span())
-                    }
-                    Override::Explicit(name) => name,
-                };
-                long_names.push(name.value());
-                let (enc_name, display) = cvt_long_name(name, &mut errs);
-                enc_names.push(enc_name);
-                name_display = Some(display);
-            }
-            for name in arg.alias {
-                long_names.push(name.value());
-                let (enc_name, _) = cvt_long_name(name, &mut errs);
-                enc_names.push(enc_name);
+            let mut enc_names = Vec::new();
+
+            let primary_long_name = match arg.long {
+                Some(Override::Inherit) => {
+                    Some(LitStr::new(&heck::AsKebabCase(&ident_str).to_string(), ident.span()))
+                }
+                Some(Override::Explicit(name)) => Some(name.clone()),
+                None => None,
+            };
+            for name in arg.alias.iter().chain(&primary_long_name) {
+                let enc = encode_long_name(name, &mut errs);
+                enc_names.push(enc.clone());
+                check_dup_name(enc, name.span(), &mut errs);
             }
 
-            if let Some(name) = arg.short {
-                let name = match name {
-                    Override::Explicit(c) => c,
-                    Override::Inherit => LitChar::new(
-                        ident_str.chars().next().expect("must have name"),
-                        ident.span(),
-                    ),
-                };
-                short_names.push(name.value());
-                let (matchee, display) = cvt_short_name(name, &mut errs);
-                enc_names.push(matchee);
-                name_display.get_or_insert(display);
-            }
-            for name in arg.short_alias {
-                short_names.push(name.value());
-                let (matchee, _) = cvt_short_name(name, &mut errs);
-                enc_names.push(matchee);
+            let primary_short_name = match arg.short {
+                Some(Override::Explicit(c)) => Some(c),
+                Some(Override::Inherit) => Some(LitChar::new(
+                    ident_str.chars().next().expect("must have ident"),
+                    ident.span(),
+                )),
+                None => None,
+            };
+            for name in arg.short_alias.iter().chain(&primary_short_name) {
+                let enc = encode_short_name(name, &mut errs);
+                enc_names.push(enc.clone());
+                check_dup_name(enc, name.span(), &mut errs);
             }
 
             assert!(!enc_names.is_empty());
+
+            let description = {
+                let sep = if arg.require_equals { '=' } else { ' ' };
+                match (primary_short_name.map(|s| s.value()), primary_long_name.map(|s| s.value()))
+                {
+                    (Some(short), Some(long)) => {
+                        format!("-{short}, --{long}{sep}<{value_name}>")
+                    }
+                    (_, Some(long)) => {
+                        format!("--{long}{sep}<{value_name}>")
+                    }
+                    (Some(short), _) => {
+                        format!("-{short}{sep}<{value_name}>")
+                    }
+                    (None, None) => unreachable!(),
+                }
+            };
 
             let attrs = ArgAttrs {
                 num_values,
@@ -522,16 +515,13 @@ pub fn expand_state_def_impl<'i>(
                 kind,
                 effective_ty,
                 finish,
-                short_names,
-                long_names,
                 enc_names,
                 attrs,
                 default_expr,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
-                name_display,
-                value_display,
+                description,
                 doc: arg.doc,
                 hide: arg.hide,
             });
@@ -554,6 +544,13 @@ pub fn expand_state_def_impl<'i>(
             }
 
             let is_vec_like = matches!(kind, FieldKind::OptionVec);
+
+            let mut description =
+                if arg.required { format!("<{value_name}>") } else { format!("[{value_name}]") };
+            if is_vec_like {
+                description.push_str("...");
+            }
+
             let field_idx = out.fields.len();
             let attrs = ArgAttrs {
                 num_values: 1,
@@ -568,16 +565,13 @@ pub fn expand_state_def_impl<'i>(
                 kind,
                 effective_ty,
                 finish,
-                short_names: String::new(),
-                long_names: Vec::new(),
                 enc_names: Vec::new(),
                 attrs,
                 default_expr,
                 exclusive: arg.exclusive,
                 dependencies: arg.requires,
                 conflicts: arg.conflicts_with,
-                name_display: Some(value_display.value()),
-                value_display,
+                description,
                 doc: arg.doc,
                 hide: arg.hide,
             });
@@ -932,12 +926,12 @@ impl ToTokens for ValidationImpl<'_> {
             });
         }
 
-        for f @ FieldInfo { ident, name_display, .. } in &def.fields {
-            let name_display = name_display.as_deref().unwrap_or_default();
+        for f @ FieldInfo { ident, description, .. } in &def.fields {
             if f.attrs.required && f.default_expr.is_none() {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
-                        return __rt::missing_required_arg(#name_display)
+                        // FIXME: This will result in duplicated rodata.
+                        return __rt::missing_required_arg(#description)
                     }
                 });
             }
@@ -946,7 +940,7 @@ impl ToTokens for ValidationImpl<'_> {
             if f.exclusive {
                 checks.extend(quote! {
                     if __argcnt != 1 {
-                        return __rt::fail_constraint(#name_display);
+                        return __rt::fail_constraint(#description);
                     }
                 });
             }
@@ -954,7 +948,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.dependencies.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_none())||* {
-                        return __rt::fail_constraint(#name_display);
+                        return __rt::fail_constraint(#description);
                     }
                 });
             }
@@ -962,7 +956,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.conflicts.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_some())||* {
-                        return __rt::fail_constraint(#name_display);
+                        return __rt::fail_constraint(#description);
                     }
                 });
             }
@@ -1004,27 +998,10 @@ impl ToTokens for RawArgsInfo<'_> {
     // See format in `RawArgInfo`.
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let mut buf = String::new();
-        let greedy_idx = self.0.catchall_field.and_then(|c| c.greedy.then_some(c.field_idx));
 
-        for (idx, f) in self.0.fields.iter().enumerate().filter(|(_, f)| !f.hide) {
-            buf.push_str(&f.short_names);
-            buf.push('\n');
-            for long in &f.long_names {
-                buf.push_str(long);
-                buf.push('\t');
-            }
-            buf.push('\n');
-            match f.kind {
-                FieldKind::BoolSetTrue | FieldKind::Counter => {}
-                FieldKind::Option | FieldKind::OptionOption | FieldKind::OptionVec => {
-                    buf.push_str(&f.value_display.value());
-                    buf.push('\t');
-                }
-            }
-            buf.push('\n');
-            buf.push(if f.attrs.require_eq { '1' } else { '0' });
-            buf.push('\n');
-            buf.push(if Some(idx) == greedy_idx { '1' } else { '0' });
+        for f in self.0.fields.iter().filter(|f| !f.hide) {
+            buf.push(if f.attrs.required { '1' } else { '0' });
+            buf.push_str(&f.description);
             buf.push('\n');
             buf.push_str(&f.doc.0);
             buf.push('\0');

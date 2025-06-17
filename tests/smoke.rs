@@ -85,5 +85,5 @@ fn help() {
     println!("{help}");
 
     assert!(help.contains("My great App."));
-    assert!(help.contains("Usage: me -v --color=<COLOR>"));
+    assert!(help.contains("Usage: me --color=<COLOR> [OPTIONS]"));
 }
