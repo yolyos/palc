@@ -256,23 +256,38 @@ fn flatten() {
         config: Option<String>,
         #[arg(long)]
         config_file: Option<String>,
+        #[arg(short, required = true)]
+        force: bool,
     }
 
     check(
-        ["", "--debug", "--verbose", "--config", "a=b"],
+        ["", "--debug", "--verbose", "--config", "a=b", "-f"],
         &Cli {
             debug: true,
             verbose: true,
-            config: Config { config: Some("a=b".into()), config_file: None },
+            config: Config { config: Some("a=b".into()), config_file: None, force: true },
         },
     );
     check(
-        ["", "--config-file", "path", "--debug", "--verbose"],
+        ["", "--config-file", "path", "--debug", "--verbose", "-f"],
         &Cli {
             debug: true,
             verbose: true,
-            config: Config { config_file: Some("path".into()), config: None },
+            config: Config { config_file: Some("path".into()), config: None, force: true },
         },
+    );
+
+    // Check for arg index offsets.
+
+    // Value errors.
+    check_err::<Cli>(
+        ["", "--config"],
+        expect!["a value is required for '--config <CONFIG>' but none was supplied"],
+    );
+    // Validation errors.
+    check_err::<Cli>(
+        ["", "--config", "foo"],
+        expect!["the argument '-f' is required but not provided"],
     );
 }
 

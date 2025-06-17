@@ -689,8 +689,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
         let feed_unnamed_func = FeedUnnamedImpl(self);
         let validation = ValidationImpl(self);
 
-        let self_unnamed_arg_cnt = self.unnamed_fields.len();
-        let flatten_tys = self.flatten_fields.iter().map(|f| f.effective_ty);
         let output_ctor = self.output_ctor.as_ref().unwrap_or(&self.output_ty);
 
         let unnamed_arg_accept_hyphen = self
@@ -710,9 +708,6 @@ impl ToTokens for ParserStateDefImpl<'_> {
                 type Output = #output_ty;
 
                 const RAW_ARGS_INFO: __rt::RawArgsInfo = #raw_args_info;
-                const TOTAL_UNNAMED_ARG_CNT: __rt::usize =
-                    #self_unnamed_arg_cnt
-                    #(+ <<#flatten_tys as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT)*;
 
                 #[allow(clippy::unnecessary_lazy_evaluations)]
                 fn init() -> Self {
@@ -781,9 +776,23 @@ impl ToTokens for FeedNamedImpl<'_> {
             })
             .collect::<TokenStream>();
 
-        let flatten_names = def.flatten_fields.iter().map(|f| f.ident);
-        let handle_else = quote! {
-            #(__rt::ParserStateDyn::feed_named(&mut self.#flatten_names, __name)?;)*
+        let handle_else = {
+            let self_field_cnt = def.fields.len() as u8;
+            let flatten_names = def.flatten_fields.iter().map(|f| f.ident);
+            let offsets = (0..def.flatten_fields.len())
+                .map(|i| {
+                    let prefix_tys = def.flatten_fields[..i].iter().map(|f| f.effective_ty);
+                    quote! {
+                        #self_field_cnt
+                        #( + <<#prefix_tys as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_arg_cnt)*
+                    }
+                });
+            quote! {
+                #(__rt::ParserStateDyn::feed_named(&mut self.#flatten_names, __name).map_break(|mut __ret| {
+                    __ret.1.index += #offsets;
+                    __ret
+                })?;)*
+            }
         };
 
         let body = if arms.is_empty() {
@@ -826,7 +835,7 @@ impl ToTokens for FeedUnnamedImpl<'_> {
             .map(|FlattenFieldInfo { effective_ty, .. }| quote_spanned! {effective_ty.span()=>
                 const {
                     __rt::assert!(
-                        <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::TOTAL_UNNAMED_ARG_CNT == 0,
+                        <<#effective_ty as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_unnamed_arg_cnt == 0,
                         "TODO: cannot arg(flatten) positional arguments yet",
                     );
                 }
@@ -940,7 +949,7 @@ impl ToTokens for ValidationImpl<'_> {
             if f.attrs.required && f.default_expr.is_none() {
                 tokens.extend(quote! {
                     if self.#ident.is_none() {
-                        return __rt::missing_required_arg(#idx)
+                        return __rt::missing_required_arg::<Self, _>(#idx)
                     }
                 });
             }
@@ -949,7 +958,7 @@ impl ToTokens for ValidationImpl<'_> {
             if f.exclusive {
                 checks.extend(quote! {
                     if __argcnt != 1 {
-                        return __rt::constraint_exclusive(#idx);
+                        return __rt::constraint_exclusive::<Self, _>(#idx);
                     }
                 });
             }
@@ -957,7 +966,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.dependencies.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_none())||* {
-                        return __rt::constraint_required(#idx);
+                        return __rt::constraint_required::<Self, _>(#idx);
                     }
                 });
             }
@@ -965,7 +974,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.conflicts.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_some())||* {
-                        return __rt::constraint_conflict(#idx);
+                        return __rt::constraint_conflict::<Self, _>(#idx);
                     }
                 });
             }
@@ -1032,6 +1041,8 @@ impl ToTokens for RawArgsInfo<'_> {
                     );
                 });
             }
+            // FIXME: This duplicates strings quadratically, especially when a large
+            // `impl Args` is flattened in many places like in the `deno-palc` example.
             (
                 quote! {{
                     #asserts
@@ -1106,8 +1117,17 @@ impl ToTokens for RawArgsInfo<'_> {
             quote! { "0" }
         };
 
+        let self_arg_cnt = self.0.fields.len() as u8;
+        let self_unnamed_arg_cnt = self.0.unnamed_fields.len() as u8;
+        let flatten_tys1 = self.0.flatten_fields.iter().map(|f| f.effective_ty);
+        let flatten_tys2 = flatten_tys1.clone();
+
         tokens.extend(quote! {
             __rt::RawArgsInfo {
+                __total_arg_cnt: #self_arg_cnt
+                    #(+ <<#flatten_tys1 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_arg_cnt)*,
+                __total_unnamed_arg_cnt: #self_unnamed_arg_cnt
+                    #(+ <<#flatten_tys2 as __rt::Args>::__State as __rt::ParserState>::RAW_ARGS_INFO.__total_unnamed_arg_cnt)*,
                 __subcommand: #subcmd,
                 __raw_arg_descs: #raw_descs,
                 __raw_arg_helps: __rt::__gate_help_str!(#raw_helps),

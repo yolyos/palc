@@ -100,7 +100,6 @@ impl<T: 'static> ParserState for FallbackState<T> {
     type Output = T;
 
     const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
-    const TOTAL_UNNAMED_ARG_CNT: usize = 0;
 
     fn init() -> Self {
         unimplemented!()
@@ -125,24 +124,24 @@ pub fn unknown_subcommand<T>(name: &OsStr) -> Result<T> {
     Err(ErrorKind::UnknownSubcommand.with_input(name.into()))
 }
 
-pub fn missing_required_arg<T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::MissingRequiredArgument.with_arg_idx(idx))
+pub fn missing_required_arg<S: ParserState, T>(idx: u8) -> Result<T> {
+    Err(ErrorKind::MissingRequiredArgument.with_arg_idx::<S>(idx))
 }
 
 pub fn missing_required_subcmd<T>() -> Result<T> {
     Err(ErrorKind::MissingRequiredSubcommand.into())
 }
 
-pub fn constraint_required<T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::ConstraintRequired.with_arg_idx(idx))
+pub fn constraint_required<S: ParserState, T>(idx: u8) -> Result<T> {
+    Err(ErrorKind::ConstraintRequired.with_arg_idx::<S>(idx))
 }
 
-pub fn constraint_exclusive<T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::ConstraintExclusive.with_arg_idx(idx))
+pub fn constraint_exclusive<S: ParserState, T>(idx: u8) -> Result<T> {
+    Err(ErrorKind::ConstraintExclusive.with_arg_idx::<S>(idx))
 }
 
-pub fn constraint_conflict<T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::ConstraintConflict.with_arg_idx(idx))
+pub fn constraint_conflict<S: ParserState, T>(idx: u8) -> Result<T> {
+    Err(ErrorKind::ConstraintConflict.with_arg_idx::<S>(idx))
 }
 
 /// A named argument with its place attached as `&mut self`.
@@ -258,17 +257,17 @@ pub type GlobalAncestors<'a> = &'a mut dyn GlobalChain;
 /// `struct Node<'_> { node: &'_ mut dyn ParserStateDyn, parent: Option<&'_ mut Node<'_>> }`
 /// except lifetimes do not work without type erasure (`dyn`).
 pub trait GlobalChain {
-    fn search_global_named(&mut self, _enc_name: &str) -> FeedNamed<'_> {
+    fn search_global_named(&mut self, _enc_name: &str) -> GlobalFeedNamed<'_> {
         ControlFlow::Continue(())
     }
 }
 
 impl GlobalChain for () {}
-impl GlobalChain for (&mut dyn ParserStateDyn, &mut dyn GlobalChain) {
-    fn search_global_named(&mut self, enc_name: &str) -> FeedNamed<'_> {
+impl<S: ParserState> GlobalChain for (&mut S, &mut dyn GlobalChain) {
+    fn search_global_named(&mut self, enc_name: &str) -> GlobalFeedNamed<'_> {
         match self.0.feed_named(enc_name) {
             ControlFlow::Break((place, attrs)) if attrs.global => {
-                ControlFlow::Break((place, attrs))
+                ControlFlow::Break((place, attrs, S::RAW_ARGS_INFO.__raw_arg_descs))
             }
             _ => self.1.search_global_named(enc_name),
         }
@@ -334,9 +333,11 @@ pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
             args: &mut ArgsIter<'_>,
             global: GlobalAncestors<'_>,
         ) -> Result<()> {
-            let mut global = (&mut self.0 as &mut dyn ParserStateDyn, global);
-            let global =
-                if CUR_HAS_GLOBAL { &mut global as &mut dyn GlobalChain } else { global.1 };
+            let global = if CUR_HAS_GLOBAL {
+                &mut (&mut self.0, global) as &mut dyn GlobalChain
+            } else {
+                global
+            };
             let subcmd = G::Subcommand::try_parse_with_name(name, args, global)?;
             *G::get(&mut self.0) = Some(subcmd);
             Ok(())
@@ -350,6 +351,9 @@ pub fn place_for_subcommand<G: GetSubcommand, const CUR_HAS_GLOBAL: bool>(
 /// So we can `?` in generated code of `command(flatten)`.
 pub type FeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs)>;
 
+/// Additionally include the original raw arg descriptions for error messages.
+pub type GlobalFeedNamed<'s> = ControlFlow<(&'s mut dyn ArgPlace, ArgAttrs, &'static str)>;
+
 /// This should be an enum, but be this for `?` support, which is unstable to impl.
 pub type FeedUnnamed<'s> = Result<Option<&'s mut dyn GreedyArgsPlace>, Option<Error>>;
 
@@ -359,7 +363,6 @@ pub trait ParserState: ParserStateDyn {
     // This is stored by-value, because we only want to promote it to
     // `&'static [RawArgsInfo]` after processing all `command(flatten)`.
     const RAW_ARGS_INFO: RawArgsInfo;
-    const TOTAL_UNNAMED_ARG_CNT: usize;
 
     fn init() -> Self;
     fn finish(&mut self) -> Result<Self::Output>;
@@ -417,7 +420,6 @@ impl ParserState for () {
     type Output = ();
 
     const RAW_ARGS_INFO: RawArgsInfo = RawArgsInfo::empty();
-    const TOTAL_UNNAMED_ARG_CNT: usize = 0;
 
     fn init() -> Self {}
 
@@ -475,8 +477,8 @@ pub fn try_parse_state<S: ParserState>(
     global: GlobalAncestors<'_>,
 ) -> Result<S::Output> {
     let mut state = S::init();
-    try_parse_with_state(&mut state, args, global).map_err(Error::in_state::<S>)?;
-    state.finish().map_err(Error::in_state::<S>)
+    try_parse_with_state(&mut state, args, global, S::RAW_ARGS_INFO.__raw_arg_descs)?;
+    state.finish()
 }
 
 #[inline(never)]
@@ -484,6 +486,7 @@ pub fn try_parse_with_state(
     state: &mut dyn ParserStateDyn,
     args: &mut ArgsIter<'_>,
     global: GlobalAncestors<'_>,
+    raw_arg_descs: &'static str,
 ) -> Result<()> {
     let named_arg_fallback = state.unnamed_arg_accept_hyphen();
 
@@ -506,10 +509,10 @@ pub fn try_parse_with_state(
                 return Ok(());
             }
             Arg::EncodedNamed(enc_name, has_eq, value) => {
-                let (place, attrs) = match state.feed_named(enc_name) {
-                    ControlFlow::Break(arg) => arg,
+                let (place, attrs, raw_arg_descs) = match state.feed_named(enc_name) {
+                    ControlFlow::Break((place, attrs)) => (place, attrs, raw_arg_descs),
                     ControlFlow::Continue(()) => match global.search_global_named(enc_name) {
-                        ControlFlow::Break(arg) => arg,
+                        ControlFlow::Break(found) => found,
                         ControlFlow::Continue(()) => {
                             if named_arg_fallback != AcceptHyphen::No {
                                 todo!()
@@ -550,10 +553,19 @@ pub fn try_parse_with_state(
                         place.feed(v, attrs)
                     } else {
                         // Next argument as the value.
-                        args.next_value(attrs.accept_hyphen).and_then(|v| place.feed(&v, attrs))
+                        args.next_value(attrs.accept_hyphen)
+                            .ok_or_else(|| ErrorKind::MissingValue.into())
+                            .and_then(|v| place.feed(&v, attrs))
                     }
                 }
-                .map_err(|err| err.with_arg_idx(attrs.index))?;
+                .map_err(
+                    #[cold]
+                    |err| {
+                        let desc =
+                            RawArgsInfo::arg_descriptions_of(raw_arg_descs).nth(attrs.index.into());
+                        err.with_arg_desc(desc)
+                    },
+                )?;
             }
             Arg::Unnamed(mut arg) => match state.feed_unnamed(&mut arg, idx, false) {
                 Ok(None) => idx += 1,
@@ -667,21 +679,18 @@ impl<'a> ArgsIter<'a> {
         self.next_short_idx = None;
     }
 
-    fn next_value(&mut self, hyphen: AcceptHyphen) -> Result<OsString> {
+    fn next_value(&mut self, hyphen: AcceptHyphen) -> Option<OsString> {
         assert!(self.next_short_idx.is_none());
-        self.iter
-            .next()
-            .filter(|raw| {
-                let raw = raw.as_encoded_bytes();
-                if raw == b"-" || !raw.starts_with(b"-") {
-                    return true;
-                }
-                match hyphen {
-                    AcceptHyphen::Yes => true,
-                    AcceptHyphen::NegativeNumber => raw[1..].iter().all(|b| b.is_ascii_digit()),
-                    AcceptHyphen::No => false,
-                }
-            })
-            .ok_or_else(|| ErrorKind::MissingValue.into())
+        self.iter.next().filter(|raw| {
+            let raw = raw.as_encoded_bytes();
+            if raw == b"-" || !raw.starts_with(b"-") {
+                return true;
+            }
+            match hyphen {
+                AcceptHyphen::Yes => true,
+                AcceptHyphen::NegativeNumber => raw[1..].iter().all(|b| b.is_ascii_digit()),
+                AcceptHyphen::No => false,
+            }
+        })
     }
 }

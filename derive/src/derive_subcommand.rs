@@ -46,7 +46,7 @@ impl ToTokens for VariantImpl<'_> {
             // Consume all rest args, possibly feed global arguments.
             VariantImpl::Unit { variant_name } => quote! {
                 |__args, __global| {
-                    __rt::try_parse_with_state(&mut (), __args, __global)?;
+                    __rt::try_parse_with_state(&mut (), __args, __global, "")?;
                     __rt::Ok(Self::#variant_name)
                 }
             },

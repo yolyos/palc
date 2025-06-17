@@ -7,6 +7,9 @@
 #[doc(hidden)]
 #[derive(Debug)]
 pub struct RawArgsInfo {
+    pub __total_arg_cnt: u8,
+    pub __total_unnamed_arg_cnt: u8,
+
     /// Subcommand argument, if any.
     pub __subcommand: Option<&'static RawCommandInfo>,
 
@@ -40,13 +43,23 @@ pub struct RawArgsInfo {
 impl RawArgsInfo {
     // NB. Used by proc-macro.
     pub const fn empty() -> Self {
-        Self { __subcommand: None, __raw_arg_descs: "", __raw_arg_helps: "", __raw_meta: "0" }
+        Self {
+            __total_arg_cnt: 0,
+            __total_unnamed_arg_cnt: 0,
+            __subcommand: None,
+            __raw_arg_descs: "",
+            __raw_arg_helps: "",
+            __raw_meta: "0",
+        }
     }
 
-    #[inline(always)]
-    pub(crate) fn arg_descriptions(&self) -> impl Iterator<Item = &'static str> {
+    // This is an associated function, to eliminate dependency to the whole
+    // struct if possible.
+    pub(crate) fn arg_descriptions_of(
+        arg_descs: &'static str,
+    ) -> impl Iterator<Item = &'static str> {
         // See `RawArgsInfo`.
-        split_terminator(self.__raw_arg_descs, b'\0')
+        split_terminator(arg_descs, b'\0')
     }
 }
 

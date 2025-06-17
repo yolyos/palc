@@ -1,7 +1,10 @@
 use std::ffi::OsString;
 use std::fmt;
 
-use crate::runtime::{CommandInternal, ParserState};
+use crate::{
+    refl::RawArgsInfo,
+    runtime::{CommandInternal, ParserState},
+};
 
 /// We use bound `UserErr: Into<DynStdError>` for conversing user errors.
 /// This implies either `UserErr: std::error::Error` or it is string-like.
@@ -19,11 +22,9 @@ where
 struct Inner {
     kind: ErrorKind,
 
-    arg_idx: Option<u8>,
-
     /// The target argument we are parsing into, when the error occurs.
     /// For unknown arguments or subcommand, this is `None`.
-    arg_description: Option<&'static str>,
+    arg_desc: Option<&'static str>,
     // The unexpected raw input we are parsing, when the error occurs.
     /// For finalization errors like constraint violation, this is `None`.
     input: Option<OsString>,
@@ -74,8 +75,7 @@ impl fmt::Debug for Error {
         let e = &*self.0;
         let mut s = f.debug_struct("Error");
         s.field("kind", &e.kind)
-            .field("arg_idx", &e.arg_idx)
-            .field("arg_description", &e.arg_description)
+            .field("arg_desc", &e.arg_desc)
             .field("input", &e.input)
             .field("source", &e.source);
         #[cfg(feature = "help")]
@@ -100,7 +100,7 @@ impl fmt::Display for Error {
             Ok(())
         };
         let opt_arg = |f: &mut fmt::Formatter<'_>, with_for: bool| {
-            if let Some(desc) = &e.arg_description {
+            if let Some(desc) = &e.arg_desc {
                 f.write_str(if with_for { " for '" } else { " '" })?;
                 f.write_str(desc)?;
                 f.write_str("'")?;
@@ -195,8 +195,7 @@ impl Error {
     fn new(kind: ErrorKind) -> Self {
         Self(Box::new(Inner {
             kind,
-            arg_idx: None,
-            arg_description: None,
+            arg_desc: None,
             input: None,
             source: None,
             #[cfg(feature = "help")]
@@ -217,8 +216,8 @@ impl Error {
         self
     }
 
-    pub(crate) fn with_arg_idx(mut self, arg_idx: u8) -> Self {
-        self.0.arg_idx = Some(arg_idx);
+    pub(crate) fn with_arg_desc(mut self, arg_desc: Option<&'static str>) -> Self {
+        self.0.arg_desc = arg_desc;
         self
     }
 
@@ -230,15 +229,6 @@ impl Error {
 
     #[cfg(not(feature = "help"))]
     pub(crate) fn in_subcommand<S: CommandInternal>(self, _subcmd: String) -> Self {
-        self
-    }
-
-    #[cold]
-    pub(crate) fn in_state<S: ParserState>(mut self) -> Self {
-        // Avoid referecing other fields, so help docs can still be stripped if unused.
-        if let Some(idx) = self.0.arg_idx {
-            self.0.arg_description = S::RAW_ARGS_INFO.arg_descriptions().nth(idx.into());
-        }
         self
     }
 }
@@ -259,7 +249,9 @@ impl ErrorKind {
     }
 
     #[cold]
-    pub(crate) fn with_arg_idx(self, arg_idx: u8) -> Error {
-        Error::new(self).with_arg_idx(arg_idx)
+    pub(crate) fn with_arg_idx<S: ParserState>(self, arg_idx: u8) -> Error {
+        Error::new(self).with_arg_desc(
+            RawArgsInfo::arg_descriptions_of(S::RAW_ARGS_INFO.__raw_arg_descs).nth(arg_idx.into()),
+        )
     }
 }
