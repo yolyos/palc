@@ -949,7 +949,7 @@ impl ToTokens for ValidationImpl<'_> {
             if f.exclusive {
                 checks.extend(quote! {
                     if __argcnt != 1 {
-                        return __rt::fail_constraint(#idx);
+                        return __rt::constraint_exclusive(#idx);
                     }
                 });
             }
@@ -957,7 +957,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.dependencies.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_none())||* {
-                        return __rt::fail_constraint(#idx);
+                        return __rt::constraint_required(#idx);
                     }
                 });
             }
@@ -965,7 +965,7 @@ impl ToTokens for ValidationImpl<'_> {
                 let paths = f.conflicts.iter();
                 checks.extend(quote! {
                     if #(self #paths.is_some())||* {
-                        return __rt::fail_constraint(#idx);
+                        return __rt::constraint_conflict(#idx);
                     }
                 });
             }

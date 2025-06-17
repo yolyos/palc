@@ -115,9 +115,16 @@ pub fn missing_required_subcmd<T>() -> Result<T> {
     Err(ErrorKind::MissingRequiredSubcommand.into())
 }
 
-// TODO: Detail errors.
-pub fn fail_constraint<T>(idx: u8) -> Result<T> {
-    Err(ErrorKind::Constraint.with_arg_idx(idx))
+pub fn constraint_required<T>(idx: u8) -> Result<T> {
+    Err(ErrorKind::ConstraintRequired.with_arg_idx(idx))
+}
+
+pub fn constraint_exclusive<T>(idx: u8) -> Result<T> {
+    Err(ErrorKind::ConstraintExclusive.with_arg_idx(idx))
+}
+
+pub fn constraint_conflict<T>(idx: u8) -> Result<T> {
+    Err(ErrorKind::ConstraintConflict.with_arg_idx(idx))
 }
 
 /// A named argument with its place attached as `&mut self`.

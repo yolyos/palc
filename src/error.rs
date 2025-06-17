@@ -54,8 +54,9 @@ pub(crate) enum ErrorKind {
     // Finalization errors.
     MissingRequiredArgument,
     MissingRequiredSubcommand,
-    // TODO: Elaborate this.
-    Constraint,
+    ConstraintRequired,
+    ConstraintExclusive,
+    ConstraintConflict,
 
     // Not really an error, but for bubbling out.
     #[cfg(feature = "help")]
@@ -102,10 +103,9 @@ impl fmt::Display for Error {
             Ok(())
         };
         let opt_arg = |f: &mut fmt::Formatter<'_>, with_for: bool| {
-            // TODO: Detail argument syntax.
-            if let Some(arg) = &e.arg_description {
+            if let Some(desc) = &e.arg_description {
                 f.write_str(if with_for { " for '" } else { " '" })?;
-                f.write_str(arg)?;
+                f.write_str(desc)?;
                 f.write_str("'")?;
             }
             Ok(())
@@ -114,7 +114,11 @@ impl fmt::Display for Error {
 
         match &e.kind {
             ErrorKind::MissingArg0 => f.write_str("missing executable argument (argv[0])"),
-            ErrorKind::InvalidUtf8 => f.write_str("invalid UTF-8"),
+            ErrorKind::InvalidUtf8 => {
+                f.write_str("invalid UTF-8")?;
+                opt_input(f)?;
+                opt_for_arg(f)
+            }
             ErrorKind::UnknownNamedArgument => {
                 f.write_str("unexpected argument")?;
                 opt_input(f)
@@ -153,15 +157,30 @@ impl fmt::Display for Error {
             }
 
             ErrorKind::MissingRequiredArgument => {
-                f.write_str("argument")?;
+                f.write_str("the argument")?;
                 opt_arg(f, false)?;
                 f.write_str(" is required but not provided")
             }
             ErrorKind::MissingRequiredSubcommand => {
-                f.write_str("subcommand is required but not provided")
+                f.write_str("the subcommand is required but not provided")
                 // TODO: Possible subcommands.
             }
-            ErrorKind::Constraint => f.write_str("TODO: constraint failed"),
+            ErrorKind::ConstraintRequired => {
+                f.write_str("the argument")?;
+                opt_arg(f, false)?;
+                f.write_str(" is required but not provided")
+            }
+            ErrorKind::ConstraintExclusive => {
+                f.write_str("the argument")?;
+                opt_arg(f, false)?;
+                f.write_str(" cannot be used with one or more of the other specified arguments")
+            }
+            ErrorKind::ConstraintConflict => {
+                f.write_str("the argument")?;
+                opt_arg(f, false)?;
+                // TODO: Conflict with what?
+                f.write_str(" cannot be used with some other arguments")
+            }
 
             #[cfg(feature = "help")]
             ErrorKind::Help => {
